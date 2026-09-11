@@ -29,10 +29,6 @@ ALL_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
 MODES = ["Singing", "Speech"]
 DIFFUSION_STEP_OPTIONS = {"Low": 25, "Recommended": 50, "High": 75, "Extreme": 100}
 FOLLOW_PITCH_OPTIONS = ["Target Voice Pitch", "Source Voice Pitch"]
-NORMAL_LUFS = -16.0
-NORMAL_LRA = 11.0
-NORMAL_TRUE_PEAK = -1.0
-FINAL_VOCAL_GAIN_DB = 6.0
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme(str(BASE_DIR / "themes" / "custom.json"))
@@ -145,16 +141,10 @@ class App(ctk.CTk):
         self.grid_columnconfigure(0, weight=1)
         outer = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         outer.grid(row=0, column=0, sticky="nsew", padx=22, pady=18)
-        outer.grid_rowconfigure(1, weight=1)
+        outer.grid_rowconfigure(0, weight=1)
         outer.grid_columnconfigure(0, weight=1)
-        control = ctk.CTkFrame(outer, corner_radius=12)
-        control.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        control.grid_columnconfigure(3, weight=1)
-        self.mode_tabs = ctk.CTkSegmentedButton(control, variable=self.mode_var, values=MODES, command=self.mode_changed, width=420, height=46, font=ctk.CTkFont(size=15, weight="bold"))
-        self.mode_tabs.grid(row=0, column=1, padx=(0, 18), pady=9, sticky="w")
-        ctk.CTkLabel(control, text="Mode", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, padx=(16, 10), pady=14, sticky="w")
         cards = ctk.CTkScrollableFrame(outer, corner_radius=0)
-        cards.grid(row=1, column=0, sticky="nsew")
+        cards.grid(row=0, column=0, sticky="nsew")
         cards.grid_columnconfigure(0, weight=1)
         self.cards_scrollable = cards
         self.source_card = self.file_card(cards, 0, "1  Source", "Choose the full song, audio, or video.", self.select_source, "source")
@@ -167,7 +157,7 @@ class App(ctk.CTk):
         self.settings_card = self.settings_ui(cards, 2)
         self.output_card = self.output_ui(cards, 3)
         bottom = ctk.CTkFrame(outer, corner_radius=12)
-        bottom.grid(row=2, column=0, sticky="ew", pady=(12, 8))
+        bottom.grid(row=1, column=0, sticky="ew", pady=(12, 8))
         bottom.grid_columnconfigure(0, weight=1)
         self.generate_button = ctk.CTkButton(bottom, text="Generate Converted Vocal + Mix", command=self.generate_thread, height=52, font=ctk.CTkFont(size=16, weight="bold"))
         self.generate_button.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="ew")
@@ -178,9 +168,9 @@ class App(ctk.CTk):
         self.clear_button = ctk.CTkButton(bottom, text="Clear", command=self.clear_all, height=52, width=110)
         self.clear_button.grid(row=0, column=3, padx=(8, 12), pady=12)
         self.status_label = ctk.CTkLabel(outer, text="Ready", anchor="w", text_color="gray70")
-        self.status_label.grid(row=3, column=0, sticky="ew", pady=(0, 4))
+        self.status_label.grid(row=2, column=0, sticky="ew", pady=(0, 4))
         self.log_box = ctk.CTkTextbox(outer, height=145, wrap="word", font=ctk.CTkFont(family="Consolas", size=11))
-        self.log_box.grid(row=4, column=0, sticky="ew")
+        self.log_box.grid(row=3, column=0, sticky="ew")
         self.log_box.configure(state="disabled")
 
     def file_card(self, parent, row, title, subtitle, command, kind):
@@ -236,14 +226,20 @@ class App(ctk.CTk):
         ctk.CTkLabel(steps_frame, text="Voice Quality", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
         self.steps_menu = ctk.CTkOptionMenu(steps_frame, variable=self.steps_choice_var, values=list(DIFFUSION_STEP_OPTIONS.keys()), command=self.steps_changed, width=180, height=38)
         self.steps_menu.grid(row=0, column=1, padx=(12, 0), sticky="e")
+        mode_frame = ctk.CTkFrame(card)
+        mode_frame.grid(row=2, column=0, padx=16, pady=7, sticky="ew")
+        mode_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(mode_frame, text="Voice Mode", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
+        self.mode_menu = ctk.CTkOptionMenu(mode_frame, variable=self.mode_var, values=MODES, command=self.mode_changed, width=180, height=38)
+        self.mode_menu.grid(row=0, column=1, padx=(12, 0), sticky="e")
         pitch_frame = ctk.CTkFrame(card)
-        pitch_frame.grid(row=2, column=0, padx=16, pady=7, sticky="ew")
+        pitch_frame.grid(row=3, column=0, padx=16, pady=7, sticky="ew")
         pitch_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(pitch_frame, text="Follow Pitch Voice", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
         self.follow_pitch_menu = ctk.CTkOptionMenu(pitch_frame, variable=self.follow_pitch_var, values=FOLLOW_PITCH_OPTIONS, command=self.follow_pitch_changed, width=220, height=38)
         self.follow_pitch_menu.grid(row=0, column=1, padx=(12, 0), sticky="e")
         self.config_info = ctk.CTkLabel(card, text="", text_color="gray70", anchor="w", justify="left")
-        self.config_info.grid(row=3, column=0, padx=16, pady=(3, 14), sticky="w")
+        self.config_info.grid(row=4, column=0, padx=16, pady=(3, 14), sticky="w")
         return card
 
     def output_ui(self, parent, row):
@@ -268,6 +264,7 @@ class App(ctk.CTk):
         return card
 
     def mode_changed(self, choice):
+        self.mode_var.set(choice)
         self.log(f"Mode selected: {choice}")
         self.update_config_info()
 
@@ -280,8 +277,16 @@ class App(ctk.CTk):
         self.update_config_info()
 
     def update_config_info(self):
+        if self.mode_var.get() == "Singing" and self.follow_pitch_var.get() == "Target Voice Pitch":
+            description = "Singing in the same voice with minimal pitch change from the source."
+        elif self.mode_var.get() == "Singing" and self.follow_pitch_var.get() == "Source Voice Pitch":
+            description = "Singing in the same voice with the exact same pitch as the source."
+        elif self.mode_var.get() == "Speech" and self.follow_pitch_var.get() == "Target Voice Pitch":
+            description = "Speaking in the exact same voice."
+        else:
+            description = "Speaking in the exact voice with minimal pitch change from the source."
         cfg = self.get_config()
-        text = f"steps={cfg['steps']} · cfg={cfg['cfg']:.2f} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']} · pitch={cfg['pitch']} · length_adjust=1.0 · fp16=True"
+        text = f"steps={cfg['steps']} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']}    {description}"
         self.config_info.configure(text=text)
 
     def choose_file(self, title):
@@ -300,7 +305,7 @@ class App(ctk.CTk):
         self.source_card["name"].configure(text=self.source_path.name, text_color="green")
         self.clear_previous_processing()
         self.separation_complete = False
-        self.log(f"Source selected: {self.source_path}")
+        self.log(f"Source selected: {self._display_path(self.source_path)}")
         self.set_status("Source selected")
 
     def select_target(self):
@@ -314,7 +319,7 @@ class App(ctk.CTk):
         self.target_uvr_vocal_path = None
         self.target_path = Path(path)
         self.target_card["name"].configure(text=self.target_path.name, text_color="green")
-        self.log(f"Target selected: {self.target_path}")
+        self.log(f"Target selected: {self._display_path(self.target_path)}")
         self.set_status("Target selected")
 
     def separate_thread(self):
@@ -344,7 +349,6 @@ class App(ctk.CTk):
 
     def ensure_source_stems(self):
         if self.instrumental_path and self.instrumental_path.exists() and self.uvr_vocal_path and self.uvr_vocal_path.exists():
-            self.separation_complete = True
             return
         if not self.source_path or not self.source_path.exists():
             raise RuntimeError("Source audio or video was not found.")
@@ -359,10 +363,8 @@ class App(ctk.CTk):
         self.after(0, lambda: self.separation_status.configure(text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange"))
         self.source_wav = self.inputs_dir / "source.wav"
         self.extract_audio(self.source_path, self.source_wav, "source", 2)
-        self.after(0, lambda: self.separation_status.configure(text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange"))
         self.run_uvr(UVR_INSTRUMENT_MODEL, self.instrumental_dir, "Instrumental")
         self.cleanup_gpu()
-        self.after(0, lambda: self.separation_status.configure(text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange"))
         self.run_uvr(UVR_VOCAL_MODEL, self.vocal_dir, "Vocals")
         self.cleanup_gpu()
         self.instrumental_path = self.normalize_audio(self.instrumental_path, "instrumental")
@@ -375,8 +377,8 @@ class App(ctk.CTk):
         self.after(0, lambda: self.instrumental_download.configure(state="normal"))
         self.after(0, lambda: self.vocal_preview.configure(state="normal"))
         self.after(0, lambda: self.vocal_download.configure(state="normal"))
-        self.log(f"Normalized instrumental: {self.instrumental_path}")
-        self.log(f"Normalized source vocal: {self.uvr_vocal_path}")
+        self.log(f"Normalized instrumental: {self._display_path(self.instrumental_path)}")
+        self.log(f"Normalized source vocal: {self._display_path(self.uvr_vocal_path)}")
 
     def run_uvr(self, model_path, output_dir, stem_name):
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -399,7 +401,7 @@ class App(ctk.CTk):
             self.instrumental_path = selected
         else:
             self.uvr_vocal_path = selected
-        self.log(f"{stem_name}: {selected}")
+        self.log(f"{stem_name}: {self._display_path(selected)}")
 
     def run_target_uvr(self):
         if not self.target_path or not self.target_path.exists():
@@ -431,7 +433,7 @@ class App(ctk.CTk):
         self.target_uvr_vocal_path = self.normalize_audio(selected, "target_vocal")
         self.target_wav = self.target_uvr_vocal_path
         self.target_preview_wav = self.target_uvr_vocal_path
-        self.log(f"Clean target vocal: {self.target_uvr_vocal_path}")
+        self.log(f"Clean target vocal: {self._display_path(self.target_uvr_vocal_path)}")
         self.cleanup_gpu()
         return self.target_uvr_vocal_path
 
@@ -458,7 +460,7 @@ class App(ctk.CTk):
         if not self.ffmpeg:
             raise RuntimeError(f"FFmpeg was not found: {FFMPEG}")
         output = self.normalized_dir / f"{Path(input_path).stem}_{name}.wav"
-        command = [self.ffmpeg, "-y", "-i", str(input_path), "-af", f"loudnorm=I={NORMAL_LUFS}:LRA={NORMAL_LRA}:TP={NORMAL_TRUE_PEAK}", "-ar", "44100", "-c:a", "pcm_s16le", str(output)]
+        command = [self.ffmpeg, "-y", "-i", str(input_path), "-af", "loudnorm=I=-16:LRA=11:TP=-1", "-ar", "44100", "-c:a", "pcm_s16le", str(output)]
         self.log(f"Normalizing: {Path(input_path).name}")
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0 or not output.exists():
@@ -524,12 +526,11 @@ class App(ctk.CTk):
             self.log(f"Seed-VC steps: {cfg['steps']}")
             self.log(f"Seed-VC strength: {cfg['cfg']:.2f}")
             self.log(f"Seed-VC F0: {cfg['f0']}")
-            self.log(f"Seed-VC Auto F0: {cfg['auto_f0']}")
-            self.log(f"Seed-VC Pitch Shift: {cfg['pitch']}")
             self.log(f"Seed-VC Follow Pitch Voice: {self.follow_pitch_var.get()}")
             self.set_status("Running Seed-VC...")
             self.run_seed_vc()
             self.converted_vocal_path = self.normalize_audio(self.converted_vocal_path, "converted_vocal")
+            self.soften_converted_vocal()
             if self.separation_complete:
                 self.set_status("Mixing final output...")
                 self.mix_final()
@@ -544,7 +545,7 @@ class App(ctk.CTk):
             self.after(0, lambda: self.bottom_preview.configure(state="normal", text="▶"))
             self.after(0, lambda: self.bottom_download.configure(state="normal"))
             self.set_status("Conversion complete")
-            self.log(f"Final output: {self.output_path}")
+            self.log(f"Final output: {self._display_path(self.output_path)}")
         except Exception as exc:
             self.log(f"GENERATION ERROR: {type(exc).__name__}: {exc}")
             self.set_status("Generation failed")
@@ -572,17 +573,30 @@ class App(ctk.CTk):
         if not outputs:
             raise RuntimeError("Seed-VC produced no WAV output.")
         self.converted_vocal_path = outputs[0]
-        self.log(f"Converted vocal: {self.converted_vocal_path}")
+        self.log(f"Converted vocal: {self._display_path(self.converted_vocal_path)}")
+
+    def soften_converted_vocal(self):
+        if not self.ffmpeg or not self.converted_vocal_path or not Path(self.converted_vocal_path).exists():
+            raise RuntimeError("Converted vocal was not found for softening.")
+        output = self.normalized_dir / "converted_vocal_softened.wav"
+        filter_chain = "highpass=f=70,lowpass=f=14500,equalizer=f=6200:t=q:w=1.0:g=-3.0,equalizer=f=9000:t=q:w=1.2:g=-2.0,acompressor=threshold=-18dB:ratio=2:attack=8:release=100,alimiter=limit=-2dB"
+        command = [self.ffmpeg, "-y", "-i", str(self.converted_vocal_path), "-af", filter_chain, "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", str(output)]
+        completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+        if completed.returncode != 0 or not output.exists():
+            self.log_process_output(completed.stdout)
+            raise RuntimeError("Converted vocal softening failed.")
+        self.converted_vocal_path = output
+        self.log(f"Softened converted vocal: {self._display_path(self.converted_vocal_path)}")
 
     def mix_final(self):
         self.output_path = self.output_dir / "final_mix.wav"
-        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume={FINAL_VOCAL_GAIN_DB}dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=1[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1[out]"])
+        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume=2dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=1[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.instrumental_path), "-i", str(self.converted_vocal_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0 or not self.output_path.exists():
             self.log_process_output(completed.stdout)
             raise RuntimeError("Final mix failed.")
-        self.log(f"Final mix created with +{FINAL_VOCAL_GAIN_DB:.1f} dB converted vocal gain.")
+        self.log(f"Final mix created: {self._display_path(self.output_path)}")
 
     def toggle_source_preview(self):
         self.toggle_preview("source")
@@ -665,7 +679,7 @@ class App(ctk.CTk):
                 self.preview_process = subprocess.Popen([ffplay, "-nodisp", "-autoexit", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.preview_kind = kind
             self.set_preview_icons(kind)
-            self.log(f"Playing {kind} preview: {path}")
+            self.log(f"Playing {kind} preview: {self._display_path(path)}")
         except Exception as exc:
             self.preview_process = None
             self.preview_kind = None
@@ -714,7 +728,6 @@ class App(ctk.CTk):
         self.log(f"Voc_FT: {'found' if UVR_VOCAL_MODEL.exists() else 'missing'}")
         self.log(f"audio-separator: {'available' if Separator is not None else 'missing'}")
         self.log(f"protobuf: {version('protobuf') or 'unknown'}")
-        self.log(f"Normalization target: {NORMAL_LUFS:.1f} LUFS | True Peak {NORMAL_TRUE_PEAK:.1f} dBTP")
         if torch.cuda.is_available():
             self.log(f"CUDA: {torch.cuda.get_device_name(0)}")
             self.log(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / (1024 ** 3):.1f} GB")
@@ -772,7 +785,7 @@ class App(ctk.CTk):
         path = filedialog.asksaveasfilename(title=title, defaultextension=".wav", filetypes=[("WAV Files", "*.wav")], initialfile=initialfile)
         if path:
             shutil.copy2(source_path, path)
-            self.log(f"Saved: {path}")
+            self.log(f"Saved: {self._display_path(path)}")
             self.set_status("WAV saved")
 
     def download_instrumental(self):
@@ -798,6 +811,7 @@ class App(ctk.CTk):
         self.clear_previous_processing()
         self.steps_var.set(50)
         self.steps_choice_var.set("Recommended")
+        self.mode_var.set("Singing")
         self.follow_pitch_var.set("Target Voice Pitch")
         self.update_config_info()
         self.set_status("Ready")
@@ -838,10 +852,45 @@ class App(ctk.CTk):
                 if line.strip():
                     self.log(line)
 
-    def log(self, text):
-        print(str(text), flush=True)
+    def _display_path(self, path):
         try:
-            self.after(0, lambda t=str(text): self._append_log(t))
+            raw = str(path)
+            normalized = os.path.normpath(raw)
+            temp_root = os.path.normpath(str(TEMP_ROOT))
+            user_profile = os.path.normpath(os.environ.get("USERPROFILE", str(Path.home())))
+            try:
+                rel = os.path.relpath(normalized, temp_root)
+                if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+                    return os.path.join("%USERPROFILE%", "AppData", "Local", "Temp", "voicemdx_temp", rel)
+            except (ValueError, OSError):
+                pass
+            try:
+                rel = os.path.relpath(normalized, user_profile)
+                if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+                    return os.path.join("%USERPROFILE%", rel)
+            except (ValueError, OSError):
+                pass
+            return raw
+        except Exception:
+            return str(path)
+
+    def _display_log_text(self, text):
+        value = str(text)
+        temp_root = os.path.normpath(str(TEMP_ROOT))
+        temp_prefix = temp_root.rstrip("\\/")
+        if temp_prefix:
+            value = re.sub(re.escape(temp_prefix) + r"(?=[\\/]|$)", lambda m: os.path.join("%USERPROFILE%", "AppData", "Local", "Temp", "voicemdx_temp"), value, flags=re.IGNORECASE)
+        user_profile = os.path.normpath(os.environ.get("USERPROFILE", str(Path.home())))
+        profile_prefix = user_profile.rstrip("\\/")
+        if profile_prefix:
+            value = re.sub(re.escape(profile_prefix) + r"(?=[\\/]|$)", "%USERPROFILE%", value, flags=re.IGNORECASE)
+        return value
+
+    def log(self, text):
+        display_text = self._display_log_text(text)
+        print(display_text, flush=True)
+        try:
+            self.after(0, lambda t=display_text: self._append_log(t))
         except Exception:
             pass
 
