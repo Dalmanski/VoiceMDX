@@ -1,0 +1,20 @@
+# local junk / not part of source
+not used/
+
+# downloaded dependency / model repo
+seed-vc/
+
+# model weights and generated binaries
+UVR_MODELS/
+ffmpeg.exe
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
