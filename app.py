@@ -43,9 +43,8 @@ def cleanup_old_sessions(active=None):
     try:
         TEMP_ROOT.mkdir(parents=True, exist_ok=True)
         for path in TEMP_ROOT.glob("session_*"):
-            if active and path.resolve() == Path(active).resolve():
-                continue
-            shutil.rmtree(path, ignore_errors=True)
+            if not (active and path.resolve() == Path(active).resolve()):
+                shutil.rmtree(path, ignore_errors=True)
     except Exception:
         pass
 
@@ -53,8 +52,7 @@ def patch_bigvgan():
     if not BIGVGAN_FILE.exists():
         return "BigVGAN patch skipped: bigvgan.py not found."
     try:
-        text = BIGVGAN_FILE.read_text(encoding="utf-8")
-        original = text
+        text = original = BIGVGAN_FILE.read_text(encoding="utf-8")
         text = re.sub(r"(\bproxies:\s*Optional\[Dict\])\s*,", r"\1 = None,", text, count=1)
         text = re.sub(r"(\bresume_download:\s*bool)\s*,", r"\1 = False,", text, count=1)
         if text != original:
@@ -82,26 +80,13 @@ class App(ctk.CTk):
         self.steps_var = ctk.IntVar(value=50)
         self.steps_choice_var = ctk.StringVar(value="Recommended")
         self.follow_pitch_var = ctk.StringVar(value="Target Voice Pitch")
-        self.source_path = None
-        self.target_path = None
-        self.output_path = None
-        self.source_wav = None
-        self.target_wav = None
-        self.seed_source_wav = None
-        self.uvr_vocal_path = None
-        self.instrumental_path = None
-        self.target_uvr_vocal_path = None
-        self.converted_vocal_path = None
-        self.converted_vocal_preview = None
-        self.source_preview_wav = None
-        self.target_preview_wav = None
-        self.process = None
-        self.preview_process = None
-        self.preview_kind = None
-        self.generating = False
-        self.separating = False
-        self.target_preview_loading = False
-        self.separation_complete = False
+        self.source_path = self.target_path = self.output_path = None
+        self.source_wav = self.target_wav = self.seed_source_wav = None
+        self.uvr_vocal_path = self.instrumental_path = self.target_uvr_vocal_path = None
+        self.converted_vocal_path = self.converted_vocal_preview = None
+        self.source_preview_wav = self.target_preview_wav = None
+        self.process = self.preview_process = self.preview_kind = None
+        self.generating = self.separating = self.target_preview_loading = self.separation_complete = False
         self.ffmpeg = str(FFMPEG) if FFMPEG.exists() else None
         self.session_dir = TEMP_ROOT / f"session_{os.getpid()}_{int(time.time())}"
         self.inputs_dir = self.session_dir / "inputs"
@@ -124,15 +109,13 @@ class App(ctk.CTk):
 
     def maximize_window(self):
         try:
+            self.state("zoomed")
             if sys.platform.startswith("win"):
-                self.state("zoomed")
                 self.update_idletasks()
                 import ctypes
                 hwnd = ctypes.windll.user32.GetForegroundWindow()
                 ctypes.windll.user32.ShowWindow(hwnd, 3)
                 ctypes.windll.user32.SetForegroundWindow(hwnd)
-            else:
-                self.state("zoomed")
         except Exception as exc:
             self.log(f"Window maximize warning: {type(exc).__name__}: {exc}")
 
@@ -146,13 +129,12 @@ class App(ctk.CTk):
         cards = ctk.CTkScrollableFrame(outer, corner_radius=0)
         cards.grid(row=0, column=0, sticky="nsew")
         cards.grid_columnconfigure(0, weight=1)
+        cards.grid_columnconfigure(1, weight=1)
         self.cards_scrollable = cards
         self.source_card = self.file_card(cards, 0, "1  Source", "Choose the full song, audio, or video.", self.select_source, "source")
         self.target_card = self.file_card(cards, 0, "2  Target Voice", "Choose the target voice reference.", self.select_target, "target")
-        self.target_card["frame"].grid(row=0, column=1, sticky="ew", pady=7, padx=(8, 0))
         self.source_card["frame"].grid(row=0, column=0, sticky="ew", pady=7, padx=(0, 8))
-        cards.grid_columnconfigure(0, weight=1)
-        cards.grid_columnconfigure(1, weight=1)
+        self.target_card["frame"].grid(row=0, column=1, sticky="ew", pady=7, padx=(8, 0))
         self.stem_card = self.stem_card_ui(cards, 1)
         self.settings_card = self.settings_ui(cards, 2)
         self.output_card = self.output_ui(cards, 3)
@@ -277,17 +259,12 @@ class App(ctk.CTk):
         self.update_config_info()
 
     def update_config_info(self):
-        if self.mode_var.get() == "Singing" and self.follow_pitch_var.get() == "Target Voice Pitch":
-            description = "Singing in the same voice with minimal pitch change from the source."
-        elif self.mode_var.get() == "Singing" and self.follow_pitch_var.get() == "Source Voice Pitch":
-            description = "Singing in the same voice with the exact same pitch as the source."
-        elif self.mode_var.get() == "Speech" and self.follow_pitch_var.get() == "Target Voice Pitch":
-            description = "Speaking in the exact same voice."
-        else:
-            description = "Speaking in the exact voice with minimal pitch change from the source."
+        singing = self.mode_var.get() == "Singing"
+        target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
+        descriptions = {(True, True): "Singing in the same voice with minimal pitch change from the source.", (True, False): "Singing in the same voice with the exact same pitch as the source.", (False, True): "Speaking in the exact same voice.", (False, False): "Speaking in the exact voice with minimal pitch change from the source."}
+        description = descriptions[(singing, target_pitch)]
         cfg = self.get_config()
-        text = f"steps={cfg['steps']} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']}    {description}"
-        self.config_info.configure(text=text)
+        self.config_info.configure(text=f"steps={cfg['steps']} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']}    {description}")
 
     def choose_file(self, title):
         patterns = " ".join(f"*{ext}" for ext in ALL_EXTENSIONS)
@@ -431,8 +408,7 @@ class App(ctk.CTk):
         if not selected or not selected.exists():
             raise RuntimeError("Voc_FT did not produce a cleaned target vocal.")
         self.target_uvr_vocal_path = self.normalize_audio(selected, "target_vocal")
-        self.target_wav = self.target_uvr_vocal_path
-        self.target_preview_wav = self.target_uvr_vocal_path
+        self.target_wav = self.target_preview_wav = self.target_uvr_vocal_path
         self.log(f"Clean target vocal: {self._display_path(self.target_uvr_vocal_path)}")
         self.cleanup_gpu()
         return self.target_uvr_vocal_path
@@ -441,10 +417,7 @@ class App(ctk.CTk):
         if isinstance(value, (str, Path)):
             return [Path(value)]
         if isinstance(value, dict):
-            result = []
-            for item in value.values():
-                result.extend(self.flatten_paths(item))
-            return result
+            value = value.values()
         if isinstance(value, (list, tuple, set)):
             result = []
             for item in value:
@@ -486,9 +459,8 @@ class App(ctk.CTk):
     def get_config(self):
         steps = DIFFUSION_STEP_OPTIONS.get(self.steps_choice_var.get(), 50)
         target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
-        if self.mode_var.get() == "Singing":
-            return {"steps": steps, "cfg": 0.80, "f0": True, "auto_f0": target_pitch, "pitch": 0}
-        return {"steps": steps, "cfg": 0.80, "f0": False, "auto_f0": not target_pitch, "pitch": 0}
+        singing = self.mode_var.get() == "Singing"
+        return {"steps": steps, "cfg": 0.80, "f0": singing, "auto_f0": target_pitch if singing else not target_pitch, "pitch": 0}
 
     def seed_command(self):
         cfg = self.get_config()
@@ -519,8 +491,7 @@ class App(ctk.CTk):
                 self.set_status("Using source as vocal only - skipping UVR separation and final mixing...")
                 seed_input = self.source_path
             self.set_status("Cleaning target voice...")
-            self.target_uvr_vocal_path = self.run_target_uvr()
-            self.target_wav = self.target_uvr_vocal_path
+            self.target_wav = self.target_uvr_vocal_path = self.run_target_uvr()
             self.prepare_seed_source(seed_input)
             cfg = self.get_config()
             self.log(f"Seed-VC steps: {cfg['steps']}")
@@ -590,7 +561,7 @@ class App(ctk.CTk):
 
     def mix_final(self):
         self.output_path = self.output_dir / "final_mix.wav"
-        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume=2dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=1[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
+        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume=5dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=1[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.instrumental_path), "-i", str(self.converted_vocal_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0 or not self.output_path.exists():
@@ -621,8 +592,7 @@ class App(ctk.CTk):
             self.stop_preview()
             return
         if kind == "source":
-            path = self.source_preview_wav or self.prepare_preview(self.source_path, "source")
-            self.play_preview_path(path, kind)
+            self.play_preview_path(self.source_preview_wav or self.prepare_preview(self.source_path, "source"), kind)
             return
         if kind == "target":
             if self.target_uvr_vocal_path and self.target_uvr_vocal_path.exists():
@@ -639,15 +609,8 @@ class App(ctk.CTk):
             self.set_status("Cleaning target for preview...")
             threading.Thread(target=self.prepare_target_preview_worker, daemon=True).start()
             return
-        if kind == "instrumental":
-            path = self.instrumental_path
-        elif kind == "vocal":
-            path = self.uvr_vocal_path
-        elif kind == "converted_vocal":
-            path = self.converted_vocal_path
-        else:
-            path = self.output_path
-        self.play_preview_path(path, kind)
+        paths = {"instrumental": self.instrumental_path, "vocal": self.uvr_vocal_path, "converted_vocal": self.converted_vocal_path}
+        self.play_preview_path(paths.get(kind, self.output_path), kind)
 
     def prepare_target_preview_worker(self):
         try:
@@ -681,8 +644,7 @@ class App(ctk.CTk):
             self.set_preview_icons(kind)
             self.log(f"Playing {kind} preview: {self._display_path(path)}")
         except Exception as exc:
-            self.preview_process = None
-            self.preview_kind = None
+            self.preview_process = self.preview_kind = None
             self.set_preview_icons()
             self.log(f"Preview error: {type(exc).__name__}: {exc}")
 
@@ -715,8 +677,7 @@ class App(ctk.CTk):
                 self.preview_process.terminate()
             except Exception:
                 pass
-        self.preview_process = None
-        self.preview_kind = None
+        self.preview_process = self.preview_kind = None
         if hasattr(self, "source_card"):
             self.set_preview_icons()
 
@@ -748,8 +709,7 @@ class App(ctk.CTk):
         self.set_status("Ready" if not problems else " | ".join(problems))
 
     def clear_previous_output_only(self):
-        self.output_path = None
-        self.converted_vocal_path = None
+        self.output_path = self.converted_vocal_path = None
         self.output_name.configure(text="Show after generate output", text_color="orange")
         self.converted_vocal_name.configure(text="Show after generate output", text_color="orange")
         self.output_preview.configure(state="disabled", text="▶")
@@ -763,12 +723,8 @@ class App(ctk.CTk):
 
     def clear_previous_processing(self):
         self.clear_previous_output_only()
-        self.source_wav = None
-        self.target_wav = None
-        self.seed_source_wav = None
-        self.uvr_vocal_path = None
-        self.instrumental_path = None
-        self.target_uvr_vocal_path = None
+        self.source_wav = self.target_wav = self.seed_source_wav = None
+        self.uvr_vocal_path = self.instrumental_path = self.target_uvr_vocal_path = None
         self.target_preview_wav = None
         self.separation_complete = False
         self.instrumental_name.configure(text="Not separated yet", text_color="orange")
@@ -804,8 +760,7 @@ class App(ctk.CTk):
         if self.generating or self.separating or self.target_preview_loading:
             return
         self.stop_preview()
-        self.source_path = None
-        self.target_path = None
+        self.source_path = self.target_path = None
         self.source_card["name"].configure(text="No file selected", text_color="red")
         self.target_card["name"].configure(text="No file selected", text_color="red")
         self.clear_previous_processing()
@@ -876,12 +831,10 @@ class App(ctk.CTk):
 
     def _display_log_text(self, text):
         value = str(text)
-        temp_root = os.path.normpath(str(TEMP_ROOT))
-        temp_prefix = temp_root.rstrip("\\/")
+        temp_prefix = os.path.normpath(str(TEMP_ROOT)).rstrip("\\/")
         if temp_prefix:
             value = re.sub(re.escape(temp_prefix) + r"(?=[\\/]|$)", lambda m: os.path.join("%USERPROFILE%", "AppData", "Local", "Temp", "voicemdx_temp"), value, flags=re.IGNORECASE)
-        user_profile = os.path.normpath(os.environ.get("USERPROFILE", str(Path.home())))
-        profile_prefix = user_profile.rstrip("\\/")
+        profile_prefix = os.path.normpath(os.environ.get("USERPROFILE", str(Path.home()))).rstrip("\\/")
         if profile_prefix:
             value = re.sub(re.escape(profile_prefix) + r"(?=[\\/]|$)", "%USERPROFILE%", value, flags=re.IGNORECASE)
         return value
