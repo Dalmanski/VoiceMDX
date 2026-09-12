@@ -145,7 +145,7 @@ class App(ctk.CTk):
         self.generate_button.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="ew")
         self.bottom_preview = ctk.CTkButton(bottom, text="▶", command=self.toggle_output_preview, width=52, height=52, font=ctk.CTkFont(size=18), state="disabled")
         self.bottom_preview.grid(row=0, column=1, padx=4, pady=12)
-        self.bottom_download = ctk.CTkButton(bottom, text="⬇️", command=self.download_output, width=46, height=52, font=ctk.CTkFont(size=18), state="disabled")
+        self.bottom_download = ctk.CTkButton(bottom, text="⬇", command=self.download_output, width=46, height=52, font=ctk.CTkFont(size=18), state="disabled")
         self.bottom_download.grid(row=0, column=2, padx=4, pady=12)
         self.clear_button = ctk.CTkButton(bottom, text="Clear", command=self.clear_all, height=52, width=110)
         self.clear_button.grid(row=0, column=3, padx=(8, 12), pady=12)
@@ -184,7 +184,7 @@ class App(ctk.CTk):
         self.instrumental_actions.grid(row=2, column=2, columnspan=2, padx=(0, 16), pady=10, sticky="e")
         self.instrumental_preview = ctk.CTkButton(self.instrumental_actions, text="▶", command=self.toggle_instrumental_preview, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
         self.instrumental_preview.grid(row=0, column=0, padx=(0, 2))
-        self.instrumental_download = ctk.CTkButton(self.instrumental_actions, text="⬇️", command=self.download_instrumental, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
+        self.instrumental_download = ctk.CTkButton(self.instrumental_actions, text="⬇", command=self.download_instrumental, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
         self.instrumental_download.grid(row=0, column=1, padx=(2, 0))
         ctk.CTkLabel(card, text="Vocal", font=ctk.CTkFont(size=14, weight="bold")).grid(row=3, column=0, padx=16, pady=(4, 15), sticky="w")
         self.vocal_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="orange")
@@ -193,7 +193,7 @@ class App(ctk.CTk):
         self.vocal_actions.grid(row=3, column=2, columnspan=2, padx=(0, 16), pady=(4, 15), sticky="e")
         self.vocal_preview = ctk.CTkButton(self.vocal_actions, text="▶", command=self.toggle_vocal_preview, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
         self.vocal_preview.grid(row=0, column=0, padx=(0, 2))
-        self.vocal_download = ctk.CTkButton(self.vocal_actions, text="⬇️", command=self.download_vocal, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
+        self.vocal_download = ctk.CTkButton(self.vocal_actions, text="⬇", command=self.download_vocal, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
         self.vocal_download.grid(row=0, column=1, padx=(2, 0))
         return card
 
@@ -234,14 +234,14 @@ class App(ctk.CTk):
         self.output_name.grid(row=0, column=1, rowspan=2, padx=12, pady=12, sticky="ew")
         self.output_preview = ctk.CTkButton(card, text="▶", command=self.toggle_output_preview, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
         self.output_preview.grid(row=0, column=2, padx=4, pady=12)
-        self.output_download = ctk.CTkButton(card, text="⬇️", command=self.download_output, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
+        self.output_download = ctk.CTkButton(card, text="⬇", command=self.download_output, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
         self.output_download.grid(row=0, column=3, padx=(4, 16), pady=12)
         self.converted_vocal_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", text_color="orange")
         self.converted_vocal_name.grid(row=2, column=1, padx=12, pady=(4, 14), sticky="ew")
         ctk.CTkLabel(card, text="Converted Vocal Only", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=(4, 14), sticky="w")
         self.converted_vocal_preview = ctk.CTkButton(card, text="▶", command=self.toggle_converted_vocal_preview, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
         self.converted_vocal_preview.grid(row=2, column=2, padx=4, pady=(4, 14))
-        self.converted_vocal_download = ctk.CTkButton(card, text="⬇️", command=self.download_converted_vocal, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
+        self.converted_vocal_download = ctk.CTkButton(card, text="⬇", command=self.download_converted_vocal, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
         self.converted_vocal_download.grid(row=2, column=3, padx=(4, 16), pady=(4, 14))
         return card
 
