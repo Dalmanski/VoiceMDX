@@ -1,3 +1,4 @@
+import modules.offline as offline
 import os
 import sys
 import gc
@@ -104,6 +105,7 @@ class App(ctk.CTk):
         self.update_config_info()
         self.after(150, self.maximize_window)
         self.log(patch_bigvgan())
+        self.log(f"Offline mode: {'enabled' if offline.OFFLINE_MODE else 'disabled'}")
         self.check_environment()
         atexit.register(self.cleanup_session)
 
