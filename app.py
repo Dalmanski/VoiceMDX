@@ -32,7 +32,7 @@ DIFFUSION_STEP_OPTIONS = {"Low": 25, "Recommended": 50, "High": 75, "Extreme": 1
 FOLLOW_PITCH_OPTIONS = ["Target Voice Pitch", "Source Voice Pitch"]
 
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme(str(BASE_DIR / "themes" / "custom.json"))
+ctk.set_default_color_theme(str(BASE_DIR / "themes" / "red.json"))
 
 def version(package):
     try:
@@ -263,7 +263,7 @@ class App(ctk.CTk):
     def update_config_info(self):
         singing = self.mode_var.get() == "Singing"
         target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
-        descriptions = {(True, True): "Singing in the same voice with minimal pitch change from the source.", (True, False): "Singing in the same voice with the exact same pitch as the source.", (False, True): "Speaking in the exact same voice.", (False, False): "Speaking in the exact voice with minimal pitch change from the source."}
+        descriptions = {(True, True): "Singing in the same voice with minimal pitch change from the source.", (True, False): "Singing in the same voice with the exact same pitch as the source.", (False, True): "Speaking in the exact same voice without applying pitch from the source.", (False, False): "Speaking in the exact voice with minimal pitch change from the source."}
         description = descriptions[(singing, target_pitch)]
         cfg = self.get_config()
         self.config_info.configure(text=f"steps={cfg['steps']} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']}    {description}")
