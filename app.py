@@ -31,7 +31,7 @@ MODES = ["Singing", "Speech"]
 DIFFUSION_STEP_OPTIONS = {"Low": 25, "Recommended": 50, "High": 75, "Extreme": 100}
 FOLLOW_PITCH_OPTIONS = ["Target Voice Pitch", "Source Voice Pitch"]
 
-ctk.set_appearance_mode("dark")
+ctk.set_appearance_mode("system")
 ctk.set_default_color_theme(str(BASE_DIR / "themes" / "red.json"))
 
 def version(package):

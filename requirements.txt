@@ -2,6 +2,7 @@ accelerate==1.14.0
 audio_separator==0.47.0
 customtkinter==6.0.0
 descript_audio_codec==1.0.0
+edge_tts==7.2.8
 einops==0.8.2
 faster_whisper==1.2.1
 FreeSimpleGUI==5.1.1
@@ -21,8 +22,10 @@ omegaconf==2.3.1
 onnxruntime_gpu==1.29.0
 pandas==3.0.5
 pydub==0.25.1
+pygame==2.6.1
 python-dotenv==1.2.3
 PyYAML==6.0.3
+Requests==2.34.2
 Resemblyzer==0.1.4
 scipy==1.18.1
 sounddevice==0.5.0

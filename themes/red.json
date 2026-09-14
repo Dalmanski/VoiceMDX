@@ -2,11 +2,9 @@
     "CTk": {
         "fg_color": ["#FFF6F6", "#160B0D"]
     },
-
     "CTkToplevel": {
         "fg_color": ["#FFFFFF", "#160B0D"]
     },
-
     "CTkFrame": {
         "corner_radius": 14,
         "border_width": 1,
@@ -14,7 +12,6 @@
         "top_fg_color": ["#FFF6F6", "#2A1619"],
         "border_color": ["#E8CBCD", "#4A292E"]
     },
-
     "CTkButton": {
         "corner_radius": 14,
         "border_width": 1,
@@ -24,7 +21,6 @@
         "text_color": ["#351114", "#FFF7F8"],
         "text_color_disabled": ["#A89295", "#7E666A"]
     },
-
     "CTkLabel": {
         "corner_radius": 0,
         "border_width": 0,
@@ -32,7 +28,6 @@
         "border_color": ["#E8CBCD", "#4A292E"],
         "text_color": ["#321013", "#F9ECEE"]
     },
-
     "CTkEntry": {
         "corner_radius": 12,
         "border_width": 1,
@@ -41,7 +36,6 @@
         "text_color": ["#321013", "#FFF7F8"],
         "placeholder_text_color": ["#968184", "#94777B"]
     },
-
     "CTkTextbox": {
         "corner_radius": 12,
         "border_width": 1,
@@ -51,7 +45,6 @@
         "scrollbar_button_color": ["#E2B9BD", "#65373E"],
         "scrollbar_button_hover_color": ["#B77B82", "#8B515A"]
     },
-
     "CTkScrollableFrame": {
         "fg_color": ["#FFF6F6", "#160B0D"],
         "label_fg_color": ["#FFF6F6", "#160B0D"],
@@ -59,7 +52,6 @@
         "scrollbar_button_color": ["#E2B9BD", "#65373E"],
         "scrollbar_button_hover_color": ["#B77B82", "#8B515A"]
     },
-
     "CTkOptionMenu": {
         "corner_radius": 12,
         "fg_color": ["#FFFFFF", "#291317"],
@@ -71,7 +63,6 @@
         "text_color_disabled": ["#968184", "#7E666A"],
         "dropdown_text_color": ["#321013", "#FFF7F8"]
     },
-
     "CTkComboBox": {
         "corner_radius": 12,
         "border_width": 1,
@@ -85,7 +76,6 @@
         "dropdown_hover_color": ["#FFE8EA", "#4A2229"],
         "dropdown_text_color": ["#321013", "#FFF7F8"]
     },
-
     "CTkCheckBox": {
         "corner_radius": 7,
         "border_width": 2,
@@ -96,7 +86,6 @@
         "text_color": ["#321013", "#FFF7F8"],
         "text_color_disabled": ["#A28E91", "#7E666A"]
     },
-
     "CTkSwitch": {
         "corner_radius": 1000,
         "border_width": 2,
@@ -108,24 +97,22 @@
         "text_color": ["#321013", "#FFF7F8"],
         "text_color_disabled": ["#A28E91", "#7E666A"]
     },
-
     "CTkSlider": {
         "corner_radius": 1000,
+        "height": 18,
+        "button_length": 18,
         "button_corner_radius": 1000,
-        "border_width": 0,
         "fg_color": ["#E4D2D4", "#4A292E"],
         "progress_color": ["#D72638", "#FF4D5F"],
         "button_color": ["#FFFFFF", "#FFF7F8"],
         "button_hover_color": ["#F7EDEE", "#FFFFFF"]
     },
-
     "CTkProgressBar": {
         "corner_radius": 1000,
         "border_width": 0,
         "fg_color": ["#E4D2D4", "#362025"],
         "progress_color": ["#D72638", "#FF4D5F"]
     },
-
     "CTkScrollbar": {
         "corner_radius": 1000,
         "border_spacing": 4,
@@ -133,7 +120,6 @@
         "button_color": ["#E2B9BD", "#65373E"],
         "button_hover_color": ["#B77B82", "#8B515A"]
     },
-
     "CTkSegmentedButton": {
         "corner_radius": 12,
         "border_width": 1,
@@ -145,7 +131,6 @@
         "text_color": ["#321013", "#FFF7F8"],
         "text_color_disabled": ["#A28E91", "#7E666A"]
     },
-
     "CTkTabview": {
         "corner_radius": 12,
         "border_width": 0,
@@ -157,7 +142,6 @@
         "segmented_button_unselected_hover_color": ["#ECDADC", "#43242A"],
         "text_color": ["#321013", "#FFF7F8"]
     },
-
     "CTkRadioButton": {
         "corner_radius": 1000,
         "border_width_checked": 6,
@@ -166,15 +150,13 @@
         "fg_color": ["#D72638", "#FF4D5F"],
         "hover_color": ["#B91E2F", "#FF7180"],
         "text_color": ["#321013", "#FFF7F8"],
-        "text_color_disabled": ["#A28E91", "#7E666A"]
+        "text_color_disabled": ["#A28E91", "#7E6669"]
     },
-
     "DropdownMenu": {
         "fg_color": ["#FFFFFF", "#211114"],
         "hover_color": ["#FFE8EA", "#4A2229"],
         "text_color": ["#321013", "#FFF7F8"]
     },
-
     "CTkFont": {
         "macOS": {
             "family": "SF Pro Display",
