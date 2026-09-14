@@ -50,8 +50,8 @@ def load_settings():
     return settings
 
 SETTINGS = load_settings()
-APPEARANCE_MODE = SETTINGS.get("appearance_mode", "system")
-COLOR_THEME = SETTINGS.get("color_theme", "red.json")
+APPEARANCE_MODE = SETTINGS.get("appearance_mode")
+COLOR_THEME = SETTINGS.get("color_theme")
 THEME_FILE = BASE_DIR / "themes" / COLOR_THEME
 if not THEME_FILE.exists():
     COLOR_THEME = DEFAULT_SETTINGS["color_theme"]
