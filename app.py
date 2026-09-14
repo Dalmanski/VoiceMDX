@@ -10,6 +10,7 @@ import subprocess
 import time
 import atexit
 import importlib.metadata
+import json
 from pathlib import Path
 from tkinter import filedialog
 import customtkinter as ctk
@@ -30,9 +31,38 @@ ALL_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
 MODES = ["Singing", "Speech"]
 DIFFUSION_STEP_OPTIONS = {"Low": 25, "Recommended": 50, "High": 75, "Extreme": 100}
 FOLLOW_PITCH_OPTIONS = ["Target Voice Pitch", "Source Voice Pitch"]
+SETTINGS_FILE = BASE_DIR / "settings.json"
+DEFAULT_SETTINGS = {"appearance_mode": "system", "color_theme": "red.json"}
 
-ctk.set_appearance_mode("system")
-ctk.set_default_color_theme(str(BASE_DIR / "themes" / "red.json"))
+def load_settings():
+    settings = dict(DEFAULT_SETTINGS)
+    try:
+        if SETTINGS_FILE.exists():
+            loaded = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                settings.update(loaded)
+    except Exception:
+        settings = dict(DEFAULT_SETTINGS)
+    try:
+        SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    return settings
+
+SETTINGS = load_settings()
+APPEARANCE_MODE = SETTINGS.get("appearance_mode", "system")
+COLOR_THEME = SETTINGS.get("color_theme", "red.json")
+THEME_FILE = BASE_DIR / "themes" / COLOR_THEME
+if not THEME_FILE.exists():
+    COLOR_THEME = DEFAULT_SETTINGS["color_theme"]
+    THEME_FILE = BASE_DIR / "themes" / COLOR_THEME
+    SETTINGS["color_theme"] = COLOR_THEME
+    try:
+        SETTINGS_FILE.write_text(json.dumps(SETTINGS, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+ctk.set_appearance_mode(APPEARANCE_MODE)
+ctk.set_default_color_theme(str(THEME_FILE))
 
 def version(package):
     try:
@@ -86,6 +116,8 @@ class App(ctk.CTk):
         self.uvr_vocal_path = self.instrumental_path = self.target_uvr_vocal_path = None
         self.converted_vocal_path = self.converted_vocal_preview = None
         self.source_preview_wav = self.target_preview_wav = None
+        self.tts_process = None
+        self.tts_output_path = None
         self.process = self.preview_process = self.preview_kind = None
         self.generating = self.separating = self.target_preview_loading = self.separation_complete = False
         self.ffmpeg = str(FFMPEG) if FFMPEG.exists() else None
@@ -161,13 +193,19 @@ class App(ctk.CTk):
         card = ctk.CTkFrame(parent, corner_radius=12)
         card.grid(row=row, column=0, sticky="ew", pady=7)
         card.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=16, pady=(15, 4), sticky="w")
-        ctk.CTkLabel(card, text=subtitle, text_color="gray70").grid(row=1, column=0, padx=16, pady=(0, 13), sticky="w")
+        card.grid_columnconfigure(2, weight=0)
+        ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=(16, 10), pady=(14, 4), sticky="w")
         name = ctk.CTkLabel(card, text="No file selected", anchor="w", text_color="red")
-        name.grid(row=0, column=1, rowspan=2, padx=12, pady=12, sticky="ew")
-        ctk.CTkButton(card, text="Choose File", command=command, width=130, height=38).grid(row=0, column=2, padx=(4, 6), pady=12)
-        preview = ctk.CTkButton(card, text="▶", command=lambda k=kind: self.toggle_preview(k), width=46, height=38, font=ctk.CTkFont(size=18))
-        preview.grid(row=0, column=3, padx=(6, 16), pady=12)
+        name.grid(row=0, column=1, padx=10, pady=(14, 4), sticky="ew")
+        actions = ctk.CTkFrame(card, fg_color="transparent", border_width=0)
+        actions.grid(row=0, column=2, padx=(8, 16), pady=(12, 4), sticky="e")
+        ctk.CTkButton(actions, text="Choose File", command=command, width=130, height=38).grid(row=0, column=0)
+        preview = ctk.CTkButton(actions, text="▶", command=lambda k=kind: self.toggle_preview(k), width=46, height=38, font=ctk.CTkFont(size=18))
+        preview.grid(row=0, column=1, padx=(6, 0))
+        ctk.CTkLabel(card, text=subtitle, text_color="gray70", anchor="w").grid(row=1, column=0, columnspan=2, padx=16, pady=(0, 10), sticky="w")
+        if kind == "source":
+            tts_button = ctk.CTkButton(card, text="Open TTS Editor", command=self.open_tts_editor, width=150, height=34)
+            tts_button.grid(row=1, column=2, padx=(8, 16), pady=(0, 10), sticky="e")
         return {"frame": card, "name": name, "preview": preview}
 
     def stem_card_ui(self, parent, row):
@@ -271,6 +309,59 @@ class App(ctk.CTk):
     def choose_file(self, title):
         patterns = " ".join(f"*{ext}" for ext in ALL_EXTENSIONS)
         return filedialog.askopenfilename(title=title, filetypes=[("Audio and Video", patterns), ("All Files", "*.*")])
+
+    def open_tts_editor(self):
+        if self.generating or self.separating or self.target_preview_loading:
+            return
+        editor_path = BASE_DIR / "tts_editor.py"
+        if not editor_path.exists():
+            self.log(f"TTS editor not found: {self._display_path(editor_path)}")
+            self.set_status("TTS editor not found")
+            return
+        output_path = self.inputs_dir / "tts_source.wav"
+        try:
+            if output_path.exists():
+                output_path.unlink()
+        except Exception:
+            pass
+        command = [sys.executable, str(editor_path), "--apply-on-source", str(output_path)]
+        try:
+            self.tts_process = subprocess.Popen(command, cwd=str(BASE_DIR))
+            self.tts_output_path = output_path
+            self.log("Opening TTS Editor...")
+            self.set_status("TTS Editor opened")
+            self.after(250, self.check_tts_editor)
+        except Exception as exc:
+            self.tts_process = None
+            self.tts_output_path = None
+            self.log(f"TTS editor error: {type(exc).__name__}: {exc}")
+            self.set_status("Unable to open TTS Editor")
+
+    def check_tts_editor(self):
+        if self.tts_output_path and self.tts_output_path.exists() and self.tts_output_path.stat().st_size > 0:
+            self.apply_tts_source(self.tts_output_path)
+            self.tts_output_path = None
+            self.tts_process = None
+            return
+        if self.tts_process is not None and self.tts_process.poll() is None:
+            self.after(250, self.check_tts_editor)
+            return
+        self.tts_process = None
+        self.tts_output_path = None
+
+    def apply_tts_source(self, wav_path):
+        path = Path(wav_path)
+        if not path.exists() or path.stat().st_size <= 0:
+            self.set_status("TTS WAV was not created")
+            return
+        self.stop_preview()
+        self.source_preview_wav = path
+        self.source_path = path
+        self.source_card["name"].configure(text=path.name, text_color="green")
+        self.clear_previous_processing()
+        self.source_preview_wav = path
+        self.log(f"TTS source applied: {self._display_path(path)}")
+        self.set_status("TTS WAV loaded as Source")
 
     def select_source(self):
         if self.generating or self.separating:
@@ -794,6 +885,11 @@ class App(ctk.CTk):
         except Exception:
             pass
         self.cleanup_gpu()
+        try:
+            if self.tts_process and self.tts_process.poll() is None:
+                self.tts_process.terminate()
+        except Exception:
+            pass
         try:
             shutil.rmtree(self.session_dir, ignore_errors=True)
         except Exception:

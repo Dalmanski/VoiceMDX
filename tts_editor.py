@@ -4,9 +4,12 @@ import edge_tts
 import subprocess
 import threading
 import platform
+import os
 import shutil
 import tempfile
 import time
+import sys
+import json
 import pygame
 from pathlib import Path
 from tkinter import filedialog
@@ -15,7 +18,36 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LANGUAGE = "en-US"
 DEFAULT_ENGINE = "Microsoft Edge Neural"
 PLACEHOLDER_TEXT = "Type something here..."
+SETTINGS_FILE = BASE_DIR / "settings.json"
+DEFAULT_SETTINGS = {"appearance_mode": "system", "color_theme": "red.json"}
 
+def load_settings():
+    settings = dict(DEFAULT_SETTINGS)
+    try:
+        if SETTINGS_FILE.exists():
+            loaded = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                settings.update(loaded)
+    except Exception:
+        settings = dict(DEFAULT_SETTINGS)
+    try:
+        SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    return settings
+
+SETTINGS = load_settings()
+APPEARANCE_MODE = SETTINGS.get("appearance_mode", "system")
+COLOR_THEME = SETTINGS.get("color_theme", "red.json")
+THEME_FILE = BASE_DIR / "themes" / COLOR_THEME
+if not THEME_FILE.exists():
+    COLOR_THEME = DEFAULT_SETTINGS["color_theme"]
+    THEME_FILE = BASE_DIR / "themes" / COLOR_THEME
+    SETTINGS["color_theme"] = COLOR_THEME
+    try:
+        SETTINGS_FILE.write_text(json.dumps(SETTINGS, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 class GridSelector:
     def __init__(self, master, values=None, command=None, width=400, height=38, columns=4, gender_grouped=False):
@@ -32,7 +64,6 @@ class GridSelector:
         self.search_entry = None
         self.scroll_frame = None
         self.button = ctk.CTkButton(master, text="", width=width, height=height, anchor="w", command=self.open)
-
     def grid(self, **kwargs):
         self.button.grid(**kwargs)
 
@@ -179,7 +210,6 @@ class GridSelector:
         if self.popup is not None and self.popup.winfo_exists():
             self.popup.destroy()
 
-
 class EdgeTTS:
     def __init__(self):
         self.voices = []
@@ -228,7 +258,6 @@ class EdgeTTS:
 
     def save_mp3(self, text, voice, rate, pitch, output_path):
         asyncio.run(self.synthesize(text, voice, rate, pitch, output_path))
-
 
 class WindowsSAPI:
     def __init__(self):
@@ -291,10 +320,10 @@ class WindowsSAPI:
         self.process = None
         return False
 
-
 class TTSApp(ctk.CTk):
-    def __init__(self):
+    def __init__(self, apply_on_source_path=None):
         super().__init__()
+        self.apply_on_source_path = Path(apply_on_source_path) if apply_on_source_path else None
         self.edge_tts = EdgeTTS()
         self.sapi = WindowsSAPI()
         self.engine = DEFAULT_ENGINE
@@ -313,6 +342,22 @@ class TTSApp(ctk.CTk):
         self.setup_placeholder()
         self.setup_defaults()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.after(100, self.bring_to_front)
+
+    def bring_to_front(self):
+        try:
+            self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)
+            self.focus_force()
+            if platform.system() == "Windows":
+                import ctypes
+                hwnd = self.winfo_id()
+                ctypes.windll.user32.ShowWindow(hwnd, 5)
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+            self.after(500, lambda: self.attributes("-topmost", False))
+        except Exception:
+            pass
 
     def initialize_audio(self):
         try:
@@ -384,6 +429,9 @@ class TTSApp(ctk.CTk):
         save_button.grid(row=0, column=1, padx=(15, 8))
         self.speak_button = ctk.CTkButton(bottom_frame, text="🔊 Speak", width=180, height=48, font=ctk.CTkFont(size=17, weight="bold"), command=self.toggle_speech)
         self.speak_button.grid(row=0, column=2, padx=(8, 0))
+        if self.apply_on_source_path is not None:
+            self.apply_button = ctk.CTkButton(bottom_frame, text="Apply on Source", width=180, height=48, font=ctk.CTkFont(size=17, weight="bold"), command=self.apply_on_source)
+            self.apply_button.grid(row=0, column=3, padx=(8, 0))
 
     def setup_defaults(self):
         if self.edge_tts.voices:
@@ -556,6 +604,56 @@ class TTSApp(ctk.CTk):
         self.speak_button.configure(text="🔊 Speak")
         self.status_label.configure(text="Stopped")
 
+    def apply_on_source(self):
+        if self.is_speaking_now:
+            self.stop_speech()
+        text = self.get_text()
+        language = self.language_selector.get()
+        voice = self.get_voice()
+        rate = int(self.rate_slider.get())
+        pitch = int(self.pitch_slider.get())
+        if not voice:
+            self.status_label.configure(text=f"No voice available for {language}.")
+            return
+        if self.engine != "Microsoft Edge Neural":
+            self.status_label.configure(text="Apply on Source requires Microsoft Edge Neural.")
+            return
+        if self.apply_on_source_path is None:
+            self.status_label.configure(text="Apply on Source is unavailable.")
+            return
+        self.apply_button.configure(state="disabled")
+        self.status_label.configure(text="Creating source WAV...")
+        def worker():
+            temp_mp3 = Path(tempfile.gettempdir()) / f"voicemdx_apply_{os.getpid()}_{int(time.time() * 1000)}.mp3"
+            try:
+                self.edge_tts.save_mp3(text, voice, rate, pitch, str(temp_mp3))
+                ffmpeg = shutil.which("ffmpeg")
+                if not ffmpeg:
+                    raise RuntimeError("FFmpeg is required for WAV export. Install FFmpeg and add it to PATH.")
+                self.apply_on_source_path.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run([ffmpeg, "-y", "-i", str(temp_mp3), "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", str(self.apply_on_source_path)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    temp_mp3.unlink()
+                except Exception:
+                    pass
+                self.after(0, self.apply_on_source_finished)
+            except Exception as error:
+                try:
+                    temp_mp3.unlink()
+                except Exception:
+                    pass
+                error_message = str(error)
+                self.after(0, lambda error_message=error_message: self.apply_on_source_error(error_message))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def apply_on_source_finished(self):
+        self.status_label.configure(text="Source WAV applied")
+        self.on_close()
+
+    def apply_on_source_error(self, error):
+        self.apply_button.configure(state="normal")
+        self.status_label.configure(text=f"Apply Error: {error}")
+
     def save_wav(self):
         text = self.get_text()
         language = self.language_selector.get()
@@ -613,9 +711,11 @@ class TTSApp(ctk.CTk):
                 pass
         self.destroy()
 
-
 if __name__ == "__main__":
-    ctk.set_appearance_mode("system")
-    ctk.set_default_color_theme(str(BASE_DIR / "themes" / "red.json"))
-    app = TTSApp()
+    apply_on_source_path = None
+    if len(sys.argv) >= 3 and sys.argv[1] == "--apply-on-source":
+        apply_on_source_path = sys.argv[2]
+    ctk.set_appearance_mode(APPEARANCE_MODE)
+    ctk.set_default_color_theme(str(THEME_FILE))
+    app = TTSApp(apply_on_source_path=apply_on_source_path)
     app.mainloop()
