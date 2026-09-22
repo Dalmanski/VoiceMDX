@@ -10,32 +10,23 @@ import subprocess
 import time
 import atexit
 import importlib.metadata
+import importlib.util
 import json
 from pathlib import Path
 from tkinter import filedialog
 import customtkinter as ctk
 import torch
 
-try:
-    import onnxruntime as ort
-    try:
-        ort.preload_dlls()
-    except Exception:
-        pass
-    ONNX_RUNTIME_IMPORT_ERROR = None
-except Exception as exc:
-    ort = None
-    ONNX_RUNTIME_IMPORT_ERROR = exc
+uvr_spec = importlib.util.spec_from_file_location("uvr_mdx", Path(__file__).resolve().parent / "utils" / "uvr-mdx.py")
+uvr_mdx = importlib.util.module_from_spec(uvr_spec)
+uvr_spec.loader.exec_module(uvr_mdx)
+seed_spec = importlib.util.spec_from_file_location("seed_vc", Path(__file__).resolve().parent / "utils" / "seed-vc.py")
+seed_vc = importlib.util.module_from_spec(seed_spec)
+seed_spec.loader.exec_module(seed_vc)
 
 from widgets.console_textbox import ConsoleTextBox
 
 BASE_DIR = Path(__file__).resolve().parent
-UVR_MODEL_DIR = BASE_DIR / "UVR_MODELS"
-UVR_INSTRUMENT_MODEL = UVR_MODEL_DIR / "UVR-MDX-NET-Inst_HQ_4.onnx"
-UVR_VOCAL_MODEL = UVR_MODEL_DIR / "UVR-MDX-NET-Voc_FT.onnx"
-SEED_VC_ROOT = BASE_DIR / "seed-vc"
-INFERENCE_SCRIPT = SEED_VC_ROOT / "inference.py"
-BIGVGAN_FILE = SEED_VC_ROOT / "modules" / "bigvgan" / "bigvgan.py"
 FFMPEG = BASE_DIR / "ffmpeg.exe"
 TEMP_ROOT = Path(tempfile.gettempdir()) / "voicemdx_temp"
 AUDIO_EXTENSIONS = [".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".caf"]
@@ -51,7 +42,6 @@ CARD_GAP = 16
 SOURCE_TARGET_HEIGHT = 118
 PROCESS_CARD_HEIGHT = 238
 OUTPUT_CARD_HEIGHT = 250
-UVR_BATCH_SIZE = 2
 
 def load_settings():
     settings = dict(DEFAULT_SETTINGS)
@@ -98,27 +88,6 @@ def cleanup_old_sessions(active=None):
     except Exception:
         pass
 
-def patch_bigvgan():
-    if not BIGVGAN_FILE.exists():
-        return "BigVGAN patch skipped: bigvgan.py not found."
-    try:
-        text = original = BIGVGAN_FILE.read_text(encoding="utf-8")
-        text = re.sub(r"(\bproxies:\s*Optional\[Dict\])\s*,", r"\1 = None,", text, count=1)
-        text = re.sub(r"(\bresume_download:\s*bool)\s*,", r"\1 = False,", text, count=1)
-        if text != original:
-            BIGVGAN_FILE.write_text(text, encoding="utf-8")
-            return "BigVGAN compatibility patch applied."
-        return "BigVGAN compatibility patch ready."
-    except Exception as exc:
-        return f"BigVGAN patch error: {type(exc).__name__}: {exc}"
-
-try:
-    from audio_separator.separator import Separator
-    AUDIO_SEPARATOR_IMPORT_ERROR = None
-except Exception as exc:
-    Separator = None
-    AUDIO_SEPARATOR_IMPORT_ERROR = exc
-
 class App(ctk.CTk):
 
     def __init__(self):
@@ -156,7 +125,7 @@ class App(ctk.CTk):
         self.build_ui()
         self.update_config_info()
         self.after(100, self.maximize)
-        self.log(patch_bigvgan())
+        self.log(seed_vc.patch_bigvgan())
         self.log(f"Offline mode: {'enabled' if offline.OFFLINE_MODE else 'disabled'}")
         self.check_environment()
         atexit.register(self.cleanup_session)
@@ -208,7 +177,7 @@ class App(ctk.CTk):
         self.bottom_preview.grid(row=0, column=1, padx=4, pady=12)
         self.bottom_download = ctk.CTkButton(bottom, text="⬇", command=self.download_output, width=46, height=52, font=ctk.CTkFont(size=18), state="disabled")
         self.bottom_download.grid(row=0, column=2, padx=4, pady=12)
-        self.clear_button = ctk.CTkButton(bottom, text="Clear", command=self.clear_all, height=52, width=110)
+        self.clear_button = ctk.CTkButton(bottom, text="Clear", command=self.clear_console, height=52, width=110)
         self.clear_button.grid(row=0, column=3, padx=(8, 12), pady=12)
 
     def file_card(self, parent, row, title, subtitle, command, kind):
@@ -329,7 +298,7 @@ class App(ctk.CTk):
         target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
         descriptions = {(True, True): "Vocalizing in the same voice with minimal pitch change from the source.", (True, False): "Vocalizing in the same voice with the exact same pitch as the source.", (False, True): "Speaking in the exact same voice without applying pitch from the source.", (False, False): "Speaking in the exact voice with minimal pitch change from the source."}
         description = descriptions[(vocalize, target_pitch)]
-        cfg = self.get_config()
+        cfg = seed_vc.get_config(self)
         self.config_info.configure(text=f"steps={cfg['steps']} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']}    {description}")
 
     def choose_file(self, title):
@@ -431,7 +400,7 @@ class App(ctk.CTk):
         self.separating = True
         self.after(0, lambda: self.separate_button.configure(state="disabled", text="Separating..."))
         try:
-            self.ensure_source_stems()
+            uvr_mdx.ensure_source_stems(self)
             self.separation_complete = True
             self.after(0, lambda: self.separation_status.configure(text="Seperated Voice and Instrument complete", text_color="green"))
             self.log("Status: UVR separation complete")
@@ -442,141 +411,6 @@ class App(ctk.CTk):
         finally:
             self.separating = False
             self.after(0, lambda: self.separate_button.configure(state="normal", text="Separate Vocal & Instrument"))
-
-    def ensure_source_stems(self):
-        if self.instrumental_path and self.instrumental_path.exists() and self.uvr_vocal_path and self.uvr_vocal_path.exists():
-            return
-        if not self.source_path or not self.source_path.exists():
-            raise RuntimeError("Source audio or video was not found.")
-        if not self.ffmpeg:
-            raise RuntimeError(f"FFmpeg was not found: {FFMPEG}")
-        if Separator is None:
-            raise RuntimeError(f"audio-separator import failed: {type(AUDIO_SEPARATOR_IMPORT_ERROR).__name__}: {AUDIO_SEPARATOR_IMPORT_ERROR}")
-        if not UVR_INSTRUMENT_MODEL.exists():
-            raise RuntimeError(f"Missing instrument model: {UVR_INSTRUMENT_MODEL}")
-        if not UVR_VOCAL_MODEL.exists():
-            raise RuntimeError(f"Missing vocal model: {UVR_VOCAL_MODEL}")
-        self.after(0, lambda: self.separation_status.configure(text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange"))
-        self.source_wav = self.inputs_dir / "source.wav"
-        self.extract_audio(self.source_path, self.source_wav, "source", 2)
-        self.run_uvr(UVR_INSTRUMENT_MODEL, self.instrumental_dir, "Instrumental")
-        self.cleanup_gpu()
-        self.run_uvr(UVR_VOCAL_MODEL, self.vocal_dir, "Vocals")
-        self.cleanup_gpu()
-        self.instrumental_path = self.normalize_audio(self.instrumental_path, "instrumental")
-        self.uvr_vocal_path = self.normalize_audio(self.uvr_vocal_path, "source_vocal")
-        self.separation_complete = True
-        self.after(0, lambda: self.instrumental_name.configure(text=self.instrumental_path.name, text_color="green"))
-        self.after(0, lambda: self.vocal_name.configure(text=self.uvr_vocal_path.name, text_color="green"))
-        self.after(0, lambda: self.separation_status.configure(text="Seperated Voice and Instrument complete", text_color="green"))
-        self.after(0, lambda: self.instrumental_preview.configure(state="normal"))
-        self.after(0, lambda: self.instrumental_download.configure(state="normal"))
-        self.after(0, lambda: self.vocal_preview.configure(state="normal"))
-        self.after(0, lambda: self.vocal_download.configure(state="normal"))
-        self.log(f"Normalized instrumental: {self._display_path(self.instrumental_path)}")
-        self.log(f"Normalized source vocal: {self._display_path(self.uvr_vocal_path)}")
-
-    def create_uvr_separator(self, output_dir, stem_name, batch_size=UVR_BATCH_SIZE):
-        if ort is None:
-            raise RuntimeError(f"ONNX Runtime import failed: {type(ONNX_RUNTIME_IMPORT_ERROR).__name__}: {ONNX_RUNTIME_IMPORT_ERROR}")
-        providers = ort.get_available_providers()
-        if "CUDAExecutionProvider" not in providers:
-            raise RuntimeError(f"UVR CUDAExecutionProvider is unavailable. Available providers: {providers}")
-        separator = Separator(output_dir=str(output_dir), model_file_dir=str(UVR_MODEL_DIR), output_format="WAV", sample_rate=44100, use_soundfile=True, use_autocast=False, output_single_stem=stem_name, mdx_params={"hop_length": 1024, "segment_size": 256, "overlap": 0.25, "batch_size": batch_size, "enable_denoise": False})
-        separator.load_model(model_filename=UVR_INSTRUMENT_MODEL.name if stem_name.lower() == "instrumental" else UVR_VOCAL_MODEL.name)
-        provider = getattr(separator, "onnx_execution_provider", None)
-        if provider and provider != ["CUDAExecutionProvider"]:
-            raise RuntimeError(f"UVR selected {provider} instead of CUDAExecutionProvider")
-        self.log(f"UVR CUDA: CUDAExecutionProvider | batch={batch_size}")
-        return separator
-
-    def run_uvr(self, model_path, output_dir, stem_name):
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for item in output_dir.glob("*.wav"):
-            try:
-                item.unlink()
-            except Exception:
-                pass
-        self.log(f"Loading {model_path.name}")
-        separator = self.create_uvr_separator(output_dir, stem_name)
-        try:
-            result = separator.separate(str(self.source_wav))
-        except Exception as exc:
-            if UVR_BATCH_SIZE > 1 and "memory" in str(exc).lower():
-                self.log("UVR batch 2 memory error; retrying with batch 1...")
-                self.cleanup_gpu()
-                separator = self.create_uvr_separator(output_dir, stem_name, 1)
-                result = separator.separate(str(self.source_wav))
-            else:
-                raise
-        paths = self.flatten_paths(result)
-        discovered = sorted(output_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
-        paths += [p for p in discovered if p not in paths]
-        selected = self.pick_stem_path(paths, stem_name) or (paths[0] if paths else None)
-        if not selected or not selected.exists():
-            raise RuntimeError(f"{model_path.name} did not produce {stem_name}.wav")
-        if stem_name.lower() == "instrumental":
-            self.instrumental_path = selected
-        else:
-            self.uvr_vocal_path = selected
-        self.log(f"{stem_name}: {self._display_path(selected)}")
-
-    def run_target_uvr(self):
-        if not self.target_path or not self.target_path.exists():
-            raise RuntimeError("Target voice file not found.")
-        if not self.ffmpeg:
-            raise RuntimeError(f"FFmpeg was not found: {FFMPEG}")
-        if Separator is None:
-            raise RuntimeError(f"audio-separator import failed: {type(AUDIO_SEPARATOR_IMPORT_ERROR).__name__}: {AUDIO_SEPARATOR_IMPORT_ERROR}")
-        if not UVR_VOCAL_MODEL.exists():
-            raise RuntimeError(f"Missing vocal model: {UVR_VOCAL_MODEL}")
-        target_input = self.inputs_dir / "target.wav"
-        self.extract_audio(self.target_path, target_input, "target", 1)
-        self.target_vocal_dir.mkdir(parents=True, exist_ok=True)
-        for item in self.target_vocal_dir.glob("*.wav"):
-            try:
-                item.unlink()
-            except Exception:
-                pass
-        self.log(f"Cleaning target with {UVR_VOCAL_MODEL.name}")
-        separator = self.create_uvr_separator(self.target_vocal_dir, "Vocals")
-        try:
-            result = separator.separate(str(target_input))
-        except Exception as exc:
-            if UVR_BATCH_SIZE > 1 and "memory" in str(exc).lower():
-                self.log("UVR batch 2 memory error; retrying target with batch 1...")
-                self.cleanup_gpu()
-                separator = self.create_uvr_separator(self.target_vocal_dir, "Vocals", 1)
-                result = separator.separate(str(target_input))
-            else:
-                raise
-        paths = self.flatten_paths(result)
-        discovered = sorted(self.target_vocal_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
-        paths += [p for p in discovered if p not in paths]
-        selected = self.pick_stem_path(paths, "Vocals") or (paths[0] if paths else None)
-        if not selected or not selected.exists():
-            raise RuntimeError("Voc_FT did not produce a cleaned target vocal.")
-        self.target_uvr_vocal_path = self.normalize_audio(selected, "target_vocal")
-        self.target_wav = self.target_preview_wav = self.target_uvr_vocal_path
-        self.log(f"Clean target vocal: {self._display_path(self.target_uvr_vocal_path)}")
-        self.cleanup_gpu()
-        return self.target_uvr_vocal_path
-
-    def flatten_paths(self, value):
-        if isinstance(value, (str, Path)):
-            return [Path(value)]
-        if isinstance(value, dict):
-            value = value.values()
-        if isinstance(value, (list, tuple, set)):
-            result = []
-            for item in value:
-                result.extend(self.flatten_paths(item))
-            return result
-        return []
-
-    def pick_stem_path(self, paths, name):
-        key = name.lower()
-        return next((p for p in paths if p.exists() and key in p.stem.lower()), None)
 
     def normalize_audio(self, input_path, name):
         if not self.ffmpeg:
@@ -599,22 +433,6 @@ class App(ctk.CTk):
             raise RuntimeError(f"FFmpeg failed to extract {label} audio.")
         self.log(f"{label.title()} audio ready: {output_path}")
 
-    def prepare_seed_source(self, source_path=None):
-        self.seed_source_wav = self.inputs_dir / "seed_source.wav"
-        input_source = source_path or self.uvr_vocal_path
-        self.extract_audio(input_source, self.seed_source_wav, "source vocal", 1)
-        self.seed_source_wav = self.normalize_audio(self.seed_source_wav, "seed_source")
-
-    def get_config(self):
-        steps = DIFFUSION_STEP_OPTIONS.get(self.steps_choice_var.get(), 50)
-        target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
-        vocalize = self.mode_var.get() == "Vocalize"
-        return {"steps": steps, "cfg": 0.80, "f0": vocalize, "auto_f0": target_pitch if vocalize else not target_pitch, "pitch": 0}
-
-    def seed_command(self):
-        cfg = self.get_config()
-        return [sys.executable, str(INFERENCE_SCRIPT), "--source", str(self.seed_source_wav), "--target", str(self.target_wav), "--output", str(self.seed_output_dir), "--diffusion-steps", str(cfg["steps"]), "--length-adjust", "1.0", "--inference-cfg-rate", str(cfg["cfg"]), "--f0-condition", str(cfg["f0"]), "--auto-f0-adjust", str(cfg["auto_f0"]), "--semi-tone-shift", "0", "--fp16", "True"]
-
     def generate_thread(self):
         if self.generating or self.separating or self.target_preview_loading:
             return
@@ -625,7 +443,7 @@ class App(ctk.CTk):
             self.log("Source and target are required.")
             self.log("Status: Select source and target")
             return
-        if not self.ffmpeg or not INFERENCE_SCRIPT.exists():
+        if not self.ffmpeg or not seed_vc.INFERENCE_SCRIPT.exists():
             self.check_environment()
             return
         self.generating = True
@@ -634,21 +452,21 @@ class App(ctk.CTk):
             self.stop_preview()
             if self.separation_complete:
                 self.log("Status: Preparing separated source vocal and instrumental...")
-                self.ensure_source_stems()
+                uvr_mdx.ensure_source_stems(self)
                 seed_input = self.uvr_vocal_path
             else:
                 self.log("Status: Using source as vocal only - skipping UVR separation and final mixing...")
                 seed_input = self.source_path
             self.log("Status: Cleaning target voice...")
-            self.target_wav = self.target_uvr_vocal_path = self.run_target_uvr()
-            self.prepare_seed_source(seed_input)
-            cfg = self.get_config()
+            self.target_wav = self.target_uvr_vocal_path = uvr_mdx.run_target_uvr(self)
+            seed_vc.prepare_source(self, seed_input)
+            cfg = seed_vc.get_config(self)
             self.log(f"Seed-VC steps: {cfg['steps']}")
             self.log(f"Seed-VC strength: {cfg['cfg']:.2f}")
             self.log(f"Seed-VC F0: {cfg['f0']}")
             self.log(f"Seed-VC Follow Pitch Voice: {self.follow_pitch_var.get()}")
             self.log("Status: Running Seed-VC...")
-            self.run_seed_vc()
+            seed_vc.run(self)
             self.converted_vocal_path = self.normalize_audio(self.converted_vocal_path, "converted_vocal")
             self.soften_converted_vocal()
             if self.separation_complete:
@@ -673,27 +491,6 @@ class App(ctk.CTk):
             self.cleanup_gpu()
             self.generating = False
             self.after(0, lambda: self.generate_button.configure(state="normal", text="Generate Converted Vocal + Mix"))
-
-    def run_seed_vc(self):
-        for item in self.seed_output_dir.glob("*.wav"):
-            try:
-                item.unlink()
-            except Exception:
-                pass
-        self.process = subprocess.Popen(self.seed_command(), cwd=str(SEED_VC_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1, env=os.environ.copy())
-        for line in iter(self.process.stdout.readline, ""):
-            if line:
-                self.log(line.rstrip())
-        self.process.stdout.close()
-        code = self.process.wait()
-        self.process = None
-        if code != 0:
-            raise RuntimeError(f"Seed-VC exited with code {code}.")
-        outputs = sorted(self.seed_output_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not outputs:
-            raise RuntimeError("Seed-VC produced no WAV output.")
-        self.converted_vocal_path = outputs[0]
-        self.log(f"Converted vocal: {self._display_path(self.converted_vocal_path)}")
 
     def soften_converted_vocal(self):
         if not self.ffmpeg or not self.converted_vocal_path or not Path(self.converted_vocal_path).exists():
@@ -763,7 +560,7 @@ class App(ctk.CTk):
 
     def prepare_target_preview_worker(self):
         try:
-            target = self.run_target_uvr()
+            target = uvr_mdx.run_target_uvr(self)
             self.after(0, lambda: self.target_card["preview"].configure(state="normal", text="▶"))
             self.log("Status: Target vocal ready")
             self.after(0, lambda p=target: self.play_preview_path(p, "target"))
@@ -833,21 +630,21 @@ class App(ctk.CTk):
     def check_environment(self):
         problems = []
         self.log(f"FFmpeg: {self.ffmpeg or f'missing: {FFMPEG}'}")
-        self.log(f"Seed-VC: {'found' if INFERENCE_SCRIPT.exists() else 'missing'}")
-        self.log(f"Inst_HQ_4: {'found' if UVR_INSTRUMENT_MODEL.exists() else 'missing'}")
-        self.log(f"Voc_FT: {'found' if UVR_VOCAL_MODEL.exists() else 'missing'}")
-        self.log(f"audio-separator: {'available' if Separator is not None else 'missing'}")
+        self.log(f"Seed-VC: {'found' if seed_vc.INFERENCE_SCRIPT.exists() else 'missing'}")
+        self.log(f"Inst_HQ_4: {'found' if uvr_mdx.UVR_INSTRUMENT_MODEL.exists() else 'missing'}")
+        self.log(f"Voc_FT: {'found' if uvr_mdx.UVR_VOCAL_MODEL.exists() else 'missing'}")
+        self.log(f"audio-separator: {'available' if uvr_mdx.Separator is not None else 'missing'}")
         self.log(f"audio-separator version: {version('audio-separator') or 'unknown'}")
-        if ort is not None:
+        if uvr_mdx.ort is not None:
             self.log(f"ONNX Runtime: {version('onnxruntime-gpu') or version('onnxruntime') or 'unknown'}")
-            self.log(f"ONNX device: {ort.get_device()}")
-            self.log(f"ONNX providers: {ort.get_available_providers()}")
-            if torch.cuda.is_available() and "CUDAExecutionProvider" in ort.get_available_providers():
+            self.log(f"ONNX device: {uvr_mdx.ort.get_device()}")
+            self.log(f"ONNX providers: {uvr_mdx.ort.get_available_providers()}")
+            if torch.cuda.is_available() and "CUDAExecutionProvider" in uvr_mdx.ort.get_available_providers():
                 self.log("UVR inference: CUDA")
             else:
                 problems.append("UVR CUDA provider unavailable")
         else:
-            self.log(f"ONNX Runtime: unavailable ({type(ONNX_RUNTIME_IMPORT_ERROR).__name__}: {ONNX_RUNTIME_IMPORT_ERROR})")
+            self.log(f"ONNX Runtime: unavailable ({type(uvr_mdx.ONNX_RUNTIME_IMPORT_ERROR).__name__}: {uvr_mdx.ONNX_RUNTIME_IMPORT_ERROR})")
             problems.append("ONNX Runtime unavailable")
         self.log(f"protobuf: {version('protobuf') or 'unknown'}")
         if torch.cuda.is_available():
@@ -859,13 +656,13 @@ class App(ctk.CTk):
             self.log("CUDA: not detected")
         if not self.ffmpeg:
             problems.append("FFmpeg missing")
-        if not INFERENCE_SCRIPT.exists():
+        if not seed_vc.INFERENCE_SCRIPT.exists():
             problems.append("Seed-VC missing")
-        if Separator is None:
+        if uvr_mdx.Separator is None:
             problems.append("audio-separator missing")
-        if not UVR_INSTRUMENT_MODEL.exists():
+        if not uvr_mdx.UVR_INSTRUMENT_MODEL.exists():
             problems.append("Inst_HQ_4 missing")
-        if not UVR_VOCAL_MODEL.exists():
+        if not uvr_mdx.UVR_VOCAL_MODEL.exists():
             problems.append("Voc_FT missing")
         self.log("Status: " + ("Ready" if not problems else " | ".join(problems)))
 
@@ -917,21 +714,10 @@ class App(ctk.CTk):
     def download_converted_vocal(self):
         self.download_audio(self.converted_vocal_path, "Save converted vocal WAV", "converted_vocal_saved.wav")
 
-    def clear_all(self):
+    def clear_console(self):
         if self.generating or self.separating or self.target_preview_loading:
             return
-        self.stop_preview()
-        self.source_path = self.target_path = None
-        self.source_card["name"].configure(text="No file selected", text_color="red")
-        self.target_card["name"].configure(text="No file selected", text_color="red")
-        self.clear_previous_processing()
-        self.steps_var.set(50)
-        self.steps_choice_var.set("Recommended")
-        self.mode_var.set("Vocalize")
-        self.follow_pitch_var.set("Target Voice Pitch")
-        self.update_config_info()
-        self.log("Status: Ready")
-        self.log("Cleared.")
+        self.console.clear()
 
     def cleanup_gpu(self):
         gc.collect()
