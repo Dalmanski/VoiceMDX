@@ -42,6 +42,8 @@ CARD_GAP = 16
 SOURCE_TARGET_HEIGHT = 118
 PROCESS_CARD_HEIGHT = 238
 OUTPUT_CARD_HEIGHT = 250
+MIN_SEMITONE = -72
+MAX_SEMITONE = 72
 
 def load_settings():
     settings = dict(DEFAULT_SETTINGS)
@@ -100,6 +102,7 @@ class App(ctk.CTk):
         self.steps_var = ctk.IntVar(value=50)
         self.steps_choice_var = ctk.StringVar(value="Recommended")
         self.follow_pitch_var = ctk.StringVar(value="Target Voice Pitch")
+        self.semitone_var = ctk.IntVar(value=0)
         self.source_path = self.target_path = self.output_path = None
         self.source_wav = self.target_wav = self.seed_source_wav = None
         self.uvr_vocal_path = self.instrumental_path = self.target_uvr_vocal_path = None
@@ -124,6 +127,7 @@ class App(ctk.CTk):
             path.mkdir(parents=True, exist_ok=True)
         self.build_ui()
         self.update_config_info()
+        self.update_semitone_display()
         self.after(100, self.maximize)
         self.log(seed_vc.patch_bigvgan())
         self.log(f"Offline mode: {'enabled' if offline.OFFLINE_MODE else 'disabled'}")
@@ -132,7 +136,7 @@ class App(ctk.CTk):
 
     def maximize(self):
         try:
-            self.state('zoomed')
+            self.state("zoomed")
         except Exception:
             pass
 
@@ -151,9 +155,9 @@ class App(ctk.CTk):
         cards.grid_columnconfigure(0, weight=0, minsize=self.card_width)
         cards.grid_columnconfigure(1, weight=0, minsize=self.card_width)
         self.cards_scrollable = cards
-        self.source_card = self.file_card(cards, 0, "1  Source", "Choose the full song, audio, or video.", self.select_source, "source")
+        self.source_card = self.file_card(cards, 0, "📌 Source", "Choose the full song, audio, or video.", self.select_source, "source")
         self.source_card["frame"].grid(row=0, column=0, sticky="nsew", pady=(0, 8), padx=(0, 8))
-        self.target_card = self.file_card(cards, 0, "2  Target Voice", "Choose the target voice reference.", self.select_target, "target")
+        self.target_card = self.file_card(cards, 0, "📌 Target Voice", "Choose the target voice reference.", self.select_target, "target")
         self.target_card["frame"].grid(row=0, column=1, sticky="nsew", pady=(0, 8), padx=(8, 0))
         divider = ctk.CTkFrame(cards, width=self.card_width * 2 + CARD_GAP, height=2, corner_radius=0, border_width=0, fg_color=("gray75", "gray25"))
         divider.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
@@ -205,7 +209,7 @@ class App(ctk.CTk):
         card.grid(row=row, column=column, sticky="nsew", pady=7, padx=(0, 8) if column == 0 else (8, 0))
         card.grid_propagate(False)
         card.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(card, text="3  UVR Separation", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=(16, 10), pady=(15, 4), sticky="w")
+        ctk.CTkLabel(card, text="📌 UVR Separation", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=(16, 10), pady=(15, 4), sticky="w")
         self.separate_button = ctk.CTkButton(card, text="Separate Vocal & Instrument", command=self.separate_thread, width=205, height=36, font=ctk.CTkFont(size=13, weight="bold"))
         self.separate_button.grid(row=0, column=2, padx=(10, 16), pady=(12, 4), sticky="e")
         self.separation_status = ctk.CTkLabel(card, text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange")
@@ -235,27 +239,40 @@ class App(ctk.CTk):
         card.grid(row=row, column=column, sticky="nsew", pady=7, padx=(0, 8) if column == 0 else (8, 0))
         card.grid_propagate(False)
         card.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(card, text="Seed-VC Settings", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, padx=16, pady=(14, 7), sticky="w")
-        steps_frame = ctk.CTkFrame(card)
-        steps_frame.grid(row=1, column=0, padx=16, pady=7, sticky="ew")
-        steps_frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(steps_frame, text="Voice Quality", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
-        self.steps_menu = ctk.CTkOptionMenu(steps_frame, variable=self.steps_choice_var, values=list(DIFFUSION_STEP_OPTIONS.keys()), command=self.steps_changed, width=180, height=38)
-        self.steps_menu.grid(row=0, column=1, padx=(12, 0), sticky="e")
+        card.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(card, text="⚙️ Seed-VC Settings", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, padx=16, pady=(14, 7), sticky="w")
+        quality_frame = ctk.CTkFrame(card)
+        quality_frame.grid(row=1, column=0, padx=(16, 7), pady=6, sticky="ew")
+        quality_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(quality_frame, text="VOICE QUALITY", font=ctk.CTkFont(size=13, weight="bold")).grid(row=0, column=0, padx=(10, 6), pady=8, sticky="w")
+        self.steps_menu = ctk.CTkOptionMenu(quality_frame, variable=self.steps_choice_var, values=list(DIFFUSION_STEP_OPTIONS.keys()), command=self.steps_changed, width=150, height=34)
+        self.steps_menu.grid(row=0, column=1, padx=(4, 10), pady=6, sticky="e")
+        follow_frame = ctk.CTkFrame(card)
+        follow_frame.grid(row=1, column=1, padx=(7, 16), pady=6, sticky="ew")
+        follow_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(follow_frame, text="FOLLOW PITCH VOICE", font=ctk.CTkFont(size=13, weight="bold")).grid(row=0, column=0, padx=(10, 6), pady=8, sticky="w")
+        self.follow_pitch_menu = ctk.CTkOptionMenu(follow_frame, variable=self.follow_pitch_var, values=FOLLOW_PITCH_OPTIONS, command=self.follow_pitch_changed, width=175, height=34)
+        self.follow_pitch_menu.grid(row=0, column=1, padx=(4, 10), pady=6, sticky="e")
         mode_frame = ctk.CTkFrame(card)
-        mode_frame.grid(row=2, column=0, padx=16, pady=7, sticky="ew")
+        mode_frame.grid(row=2, column=0, padx=(16, 7), pady=6, sticky="ew")
         mode_frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(mode_frame, text="Voice Mode", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
-        self.mode_menu = ctk.CTkOptionMenu(mode_frame, variable=self.mode_var, values=MODES, command=self.mode_changed, width=180, height=38)
-        self.mode_menu.grid(row=0, column=1, padx=(12, 0), sticky="e")
+        ctk.CTkLabel(mode_frame, text="VOICE MODE", font=ctk.CTkFont(size=13, weight="bold")).grid(row=0, column=0, padx=(10, 6), pady=8, sticky="w")
+        self.mode_menu = ctk.CTkOptionMenu(mode_frame, variable=self.mode_var, values=MODES, command=self.mode_changed, width=150, height=34)
+        self.mode_menu.grid(row=0, column=1, padx=(4, 10), pady=6, sticky="e")
         pitch_frame = ctk.CTkFrame(card)
-        pitch_frame.grid(row=3, column=0, padx=16, pady=7, sticky="ew")
-        pitch_frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(pitch_frame, text="Follow Pitch Voice", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w")
-        self.follow_pitch_menu = ctk.CTkOptionMenu(pitch_frame, variable=self.follow_pitch_var, values=FOLLOW_PITCH_OPTIONS, command=self.follow_pitch_changed, width=220, height=38)
-        self.follow_pitch_menu.grid(row=0, column=1, padx=(12, 0), sticky="e")
+        pitch_frame.grid(row=2, column=1, padx=(7, 16), pady=6, sticky="ew")
+        pitch_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(pitch_frame, text="SEMITONE", font=ctk.CTkFont(size=13, weight="bold")).grid(row=0, column=0, padx=(10, 4), pady=6, sticky="w")
+        pitch_controls = ctk.CTkFrame(pitch_frame, fg_color="transparent")
+        pitch_controls.grid(row=0, column=1, padx=(0, 10), pady=6, sticky="e")
+        self.semitone_down = ctk.CTkButton(pitch_controls, text="−", command=lambda: self.adjust_semitone(-1), width=32, height=32, font=ctk.CTkFont(size=18, weight="bold"))
+        self.semitone_down.grid(row=0, column=0, padx=(0, 2), pady=0)
+        self.semitone_value = ctk.CTkLabel(pitch_controls, text="+0", width=46, anchor="center", font=ctk.CTkFont(size=14, weight="bold"))
+        self.semitone_value.grid(row=0, column=1, padx=2, pady=0)
+        self.semitone_up = ctk.CTkButton(pitch_controls, text="+", command=lambda: self.adjust_semitone(1), width=32, height=32, font=ctk.CTkFont(size=18, weight="bold"))
+        self.semitone_up.grid(row=0, column=2, padx=(2, 0), pady=0)
         self.config_info = ctk.CTkLabel(card, text="", text_color="gray70", anchor="w", justify="left")
-        self.config_info.grid(row=4, column=0, padx=16, pady=(3, 14), sticky="w")
+        self.config_info.grid(row=3, column=0, columnspan=2, padx=16, pady=(4, 12), sticky="w")
         return card
 
     def output_ui(self, parent, row, column):
@@ -263,7 +280,7 @@ class App(ctk.CTk):
         card.grid(row=row, column=column, sticky="nsew", pady=7, padx=(0, 8))
         card.grid_propagate(False)
         card.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(card, text="4  Final Output", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=16, pady=(15, 4), sticky="w")
+        ctk.CTkLabel(card, text="📌 Final Output", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=16, pady=(15, 4), sticky="w")
         ctk.CTkLabel(card, text="Normalized Instrumental + converted target vocal", text_color="gray70").grid(row=1, column=0, padx=16, pady=(0, 13), sticky="w")
         self.output_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", width=250, text_color="orange")
         self.output_name.grid(row=0, column=1, rowspan=2, padx=12, pady=12, sticky="ew")
@@ -271,9 +288,9 @@ class App(ctk.CTk):
         self.output_preview.grid(row=0, column=2, padx=4, pady=12)
         self.output_download = ctk.CTkButton(card, text="⬇", command=self.download_output, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
         self.output_download.grid(row=0, column=3, padx=(4, 16), pady=12)
+        ctk.CTkLabel(card, text="Converted Vocal Only", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=(4, 14), sticky="w")
         self.converted_vocal_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", width=250, text_color="orange")
         self.converted_vocal_name.grid(row=2, column=1, padx=12, pady=(4, 14), sticky="ew")
-        ctk.CTkLabel(card, text="Converted Vocal Only", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=(4, 14), sticky="w")
         self.converted_vocal_preview = ctk.CTkButton(card, text="▶", command=self.toggle_converted_vocal_preview, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
         self.converted_vocal_preview.grid(row=2, column=2, padx=4, pady=(4, 14))
         self.converted_vocal_download = ctk.CTkButton(card, text="⬇", command=self.download_converted_vocal, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
@@ -293,10 +310,23 @@ class App(ctk.CTk):
         self.follow_pitch_var.set(choice)
         self.update_config_info()
 
+    def adjust_semitone(self, delta):
+        value = max(MIN_SEMITONE, min(MAX_SEMITONE, int(self.semitone_var.get()) + int(delta)))
+        self.semitone_var.set(value)
+        self.update_semitone_display(value)
+        self.update_config_info()
+
+    def update_semitone_display(self, value=None):
+        if value is None:
+            value = self.semitone_var.get()
+        value = max(MIN_SEMITONE, min(MAX_SEMITONE, int(value)))
+        self.semitone_var.set(value)
+        self.semitone_value.configure(text=f"{value:+d}")
+
     def update_config_info(self):
         vocalize = self.mode_var.get() == "Vocalize"
         target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
-        descriptions = {(True, True): "Vocalizing in the same voice with minimal pitch change from the source.", (True, False): "Vocalizing in the same voice with the exact same pitch as the source.", (False, True): "Speaking in the exact same voice without applying pitch from the source.", (False, False): "Speaking in the exact voice with minimal pitch change from the source."}
+        descriptions = {(True, True): "same voice with minimal pitch change", (True, False): "same voice with source pitch", (False, True): "exact voice without source pitch", (False, False): "exact voice with minimal source pitch"}
         description = descriptions[(vocalize, target_pitch)]
         cfg = seed_vc.get_config(self)
         self.config_info.configure(text=f"steps={cfg['steps']} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']}    {description}")
@@ -465,6 +495,7 @@ class App(ctk.CTk):
             self.log(f"Seed-VC strength: {cfg['cfg']:.2f}")
             self.log(f"Seed-VC F0: {cfg['f0']}")
             self.log(f"Seed-VC Follow Pitch Voice: {self.follow_pitch_var.get()}")
+            self.log(f"Seed-VC Semitone Shift: {cfg['pitch']:+d}")
             self.log("Status: Running Seed-VC...")
             seed_vc.run(self)
             self.converted_vocal_path = self.normalize_audio(self.converted_vocal_path, "converted_vocal")
@@ -507,7 +538,7 @@ class App(ctk.CTk):
 
     def mix_final(self):
         self.output_path = self.output_dir / "final_mix.wav"
-        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume=5dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=1[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
+        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", "[1:a]aresample=44100,volume=5dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=1[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.instrumental_path), "-i", str(self.converted_vocal_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0 or not self.output_path.exists():
@@ -692,6 +723,7 @@ class App(ctk.CTk):
         self.vocal_preview.configure(state="disabled", text="▶")
         self.vocal_download.configure(state="disabled")
         self.separation_status.configure(text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange")
+        self.update_config_info()
 
     def download_audio(self, source_path, title, initialfile):
         if not source_path or not Path(source_path).exists():

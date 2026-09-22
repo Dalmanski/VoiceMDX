@@ -9,7 +9,8 @@ SEED_VC_ROOT = BASE_DIR / "seed-vc"
 INFERENCE_SCRIPT = SEED_VC_ROOT / "inference.py"
 BIGVGAN_FILE = SEED_VC_ROOT / "modules" / "bigvgan" / "bigvgan.py"
 DIFFUSION_STEP_OPTIONS = {"Low": 25, "Recommended": 50, "High": 75, "Extreme": 100}
-
+MIN_SEMITONE = -72
+MAX_SEMITONE = 72
 
 def patch_bigvgan():
     if not BIGVGAN_FILE.exists():
@@ -25,25 +26,23 @@ def patch_bigvgan():
     except Exception as exc:
         return f"BigVGAN patch error: {type(exc).__name__}: {exc}"
 
-
 def prepare_source(app, source_path=None):
     app.seed_source_wav = app.inputs_dir / "seed_source.wav"
     input_source = source_path or app.uvr_vocal_path
     app.extract_audio(input_source, app.seed_source_wav, "source vocal", 1)
     app.seed_source_wav = app.normalize_audio(app.seed_source_wav, "seed_source")
 
-
 def get_config(app):
     steps = DIFFUSION_STEP_OPTIONS.get(app.steps_choice_var.get(), 50)
     target_pitch = app.follow_pitch_var.get() == "Target Voice Pitch"
     vocalize = app.mode_var.get() == "Vocalize"
-    return {"steps": steps, "cfg": 0.80, "f0": vocalize, "auto_f0": target_pitch if vocalize else not target_pitch, "pitch": 0}
-
+    auto_f0 = target_pitch if vocalize else not target_pitch
+    pitch = max(MIN_SEMITONE, min(MAX_SEMITONE, int(app.semitone_var.get())))
+    return {"steps": steps, "cfg": 0.80, "f0": vocalize, "auto_f0": auto_f0, "pitch": pitch}
 
 def command(app):
     cfg = get_config(app)
-    return [sys.executable, str(INFERENCE_SCRIPT), "--source", str(app.seed_source_wav), "--target", str(app.target_wav), "--output", str(app.seed_output_dir), "--diffusion-steps", str(cfg["steps"]), "--length-adjust", "1.0", "--inference-cfg-rate", str(cfg["cfg"]), "--f0-condition", str(cfg["f0"]), "--auto-f0-adjust", str(cfg["auto_f0"]), "--semi-tone-shift", "0", "--fp16", "True"]
-
+    return [sys.executable, str(INFERENCE_SCRIPT), "--source", str(app.seed_source_wav), "--target", str(app.target_wav), "--output", str(app.seed_output_dir), "--diffusion-steps", str(cfg["steps"]), "--length-adjust", "1.0", "--inference-cfg-rate", str(cfg["cfg"]), "--f0-condition", str(cfg["f0"]), "--auto-f0-adjust", str(cfg["auto_f0"]), "--semi-tone-shift", str(cfg["pitch"]), "--fp16", "True"]
 
 def run(app):
     for item in app.seed_output_dir.glob("*.wav"):
