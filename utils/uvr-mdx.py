@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import numpy as np
+import soundfile as sf
+
 try:
     import onnxruntime as ort
     try:
@@ -27,8 +30,6 @@ UVR_BATCH_SIZE = 2
 def validate(app):
     if Separator is None:
         raise RuntimeError(f"audio-separator import failed: {type(AUDIO_SEPARATOR_IMPORT_ERROR).__name__}: {AUDIO_SEPARATOR_IMPORT_ERROR}")
-    if not UVR_INSTRUMENT_MODEL.exists():
-        raise RuntimeError(f"Missing instrument model: {UVR_INSTRUMENT_MODEL}")
     if not UVR_VOCAL_MODEL.exists():
         raise RuntimeError(f"Missing vocal model: {UVR_VOCAL_MODEL}")
 
@@ -61,6 +62,20 @@ def flatten_paths(value):
 def pick_stem_path(paths, name):
     key = name.lower()
     return next((path for path in paths if path.exists() and key in path.stem.lower()), None)
+
+def has_background(source_path, vocal_path):
+    try:
+        source = sf.read(source_path, dtype="float32", always_2d=True, stop=44100 * 30)[0]
+        vocal = sf.read(vocal_path, dtype="float32", always_2d=True, stop=44100 * 30)[0]
+        length = min(len(source), len(vocal))
+        source = source[:length].mean(axis=1)
+        vocal = vocal[:length].mean(axis=1)
+        gain = np.dot(source, vocal) / max(np.dot(vocal, vocal), 1e-12)
+        residual = source - vocal * gain
+        ratio = np.sqrt(np.mean(residual ** 2) / max(np.mean(source ** 2), 1e-12))
+        return ratio > 0.2
+    except Exception:
+        return True
 
 def separate(app, input_path, model_path, output_dir, stem_name, retry_message, missing_message):
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -97,16 +112,24 @@ def ensure_source_stems(app):
     validate(app)
     app.source_wav = app.inputs_dir / "source.wav"
     app.extract_audio(app.source_path, app.source_wav, "source", 2)
-    app.instrumental_path = separate(app, app.source_wav, UVR_INSTRUMENT_MODEL, app.instrumental_dir, "Instrumental", "UVR batch 2 memory error; retrying with batch 1...", f"{UVR_INSTRUMENT_MODEL.name} did not produce Instrumental.wav")
-    app.cleanup_gpu()
     app.uvr_vocal_path = separate(app, app.source_wav, UVR_VOCAL_MODEL, app.vocal_dir, "Vocals", "UVR batch 2 memory error; retrying with batch 1...", f"{UVR_VOCAL_MODEL.name} did not produce Vocals.wav")
     app.cleanup_gpu()
-    app.instrumental_path = app.normalize_audio(app.instrumental_path, "instrumental")
+    app.source_has_background = has_background(app.source_wav, app.uvr_vocal_path)
+    app.log(f"Source background detected: {'yes' if app.source_has_background else 'no'}")
+    if app.source_has_background:
+        if not UVR_INSTRUMENT_MODEL.exists():
+            raise RuntimeError(f"Missing instrument model: {UVR_INSTRUMENT_MODEL}")
+        app.instrumental_path = separate(app, app.source_wav, UVR_INSTRUMENT_MODEL, app.instrumental_dir, "Instrumental", "UVR batch 2 memory error; retrying with batch 1...", f"{UVR_INSTRUMENT_MODEL.name} did not produce Instrumental.wav")
+        app.cleanup_gpu()
+        app.instrumental_path = app.normalize_audio(app.instrumental_path, "instrumental")
+    else:
+        app.after(0, lambda: app.instrumental_name.configure(text="No Instrument/BG yet, only vocal", text_color="yellow"))
     app.uvr_vocal_path = app.normalize_audio(app.uvr_vocal_path, "source_vocal")
-    app.after(0, lambda: app.instrumental_name.configure(text=app.instrumental_path.name, text_color="green"))
+    if app.source_has_background:
+        app.after(0, lambda: app.instrumental_name.configure(text=app.instrumental_path.name, text_color="green"))
+        app.after(0, lambda: app.instrumental_preview.configure(state="normal"))
+        app.after(0, lambda: app.instrumental_download.configure(state="normal"))
     app.after(0, lambda: app.vocal_name.configure(text=app.uvr_vocal_path.name, text_color="green"))
-    app.after(0, lambda: app.instrumental_preview.configure(state="normal"))
-    app.after(0, lambda: app.instrumental_download.configure(state="normal"))
     app.after(0, lambda: app.vocal_preview.configure(state="normal"))
     app.after(0, lambda: app.vocal_download.configure(state="normal"))
     app.log(f"Normalized instrumental: {app._display_path(app.instrumental_path)}")

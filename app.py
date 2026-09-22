@@ -17,6 +17,7 @@ import customtkinter as ctk
 import torch
 from widgets.console_textbox import ConsoleRedirect, ConsoleTextBox
 from utils.ctk_theme import configure_ctk_theme
+from utils.vid2wav import convert_media_to_wav
 
 configure_ctk_theme()
 
@@ -73,6 +74,7 @@ class App(ctk.CTk):
         self.follow_pitch_var = ctk.StringVar(value="Target Voice Pitch")
         self.semitone_var = ctk.IntVar(value=0)
         self.source_path = self.target_path = self.output_path = None
+        self.source_has_background = True
         self.source_wav = self.target_wav = self.seed_source_wav = None
         self.uvr_vocal_path = self.instrumental_path = self.target_uvr_vocal_path = None
         self.converted_vocal_path = self.converted_vocal_preview = None
@@ -82,6 +84,7 @@ class App(ctk.CTk):
         self.mic_process = None
         self.mic_output_path = None
         self.process = self.preview_process = self.preview_kind = None
+        self.preview_loop = False
         self.generating = self.separating = self.target_preview_loading = False
         self.ffmpeg = str(FFMPEG) if FFMPEG.exists() else None
         self.session_dir = TEMP_ROOT / f"session_{os.getpid()}_{int(time.time())}"
@@ -147,10 +150,12 @@ class App(ctk.CTk):
         self.generate_button.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="ew")
         self.bottom_preview = ctk.CTkButton(bottom, text="▶", command=self.toggle_output_preview, width=52, height=52, font=ctk.CTkFont(size=18), state="disabled")
         self.bottom_preview.grid(row=0, column=1, padx=4, pady=12)
+        self.bottom_loop = ctk.CTkButton(bottom, text="⟲", command=self.toggle_output_loop_preview, width=52, height=52, font=ctk.CTkFont(size=18), state="disabled")
+        self.bottom_loop.grid(row=0, column=2, padx=4, pady=12)
         self.bottom_download = ctk.CTkButton(bottom, text="⬇", command=self.download_output, width=46, height=52, font=ctk.CTkFont(size=18), state="disabled")
-        self.bottom_download.grid(row=0, column=2, padx=4, pady=12)
+        self.bottom_download.grid(row=0, column=3, padx=4, pady=12)
         self.clear_button = ctk.CTkButton(bottom, text="Clear", command=self.clear_console, height=52, width=110)
-        self.clear_button.grid(row=0, column=3, padx=(8, 12), pady=12)
+        self.clear_button.grid(row=0, column=4, padx=(8, 12), pady=12)
 
     def log(self, text, color=None, live=False):
         self.console.log(text, color=color, live=live)
@@ -188,21 +193,21 @@ class App(ctk.CTk):
         ctk.CTkLabel(card, text="Inst / BG", font=ctk.CTkFont(size=14, weight="bold")).grid(row=1, column=0, padx=16, pady=12, sticky="w")
         self.instrumental_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="gray60")
         self.instrumental_name.grid(row=1, column=1, padx=12, pady=12, sticky="ew")
-        self.instrumental_actions = ctk.CTkFrame(card, fg_color="transparent")
+        self.instrumental_actions = ctk.CTkFrame(card, fg_color="transparent", border_width=0, corner_radius=0)
         self.instrumental_actions.grid(row=1, column=2, columnspan=2, padx=(0, 16), pady=12, sticky="e")
         self.instrumental_preview = ctk.CTkButton(self.instrumental_actions, text="▶", command=self.toggle_instrumental_preview, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
-        self.instrumental_preview.grid(row=0, column=0, padx=(0, 2))
+        self.instrumental_preview.grid(row=0, column=0, padx=(0, 4))
         self.instrumental_download = ctk.CTkButton(self.instrumental_actions, text="⬇", command=self.download_instrumental, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
-        self.instrumental_download.grid(row=0, column=1, padx=(2, 0))
+        self.instrumental_download.grid(row=0, column=1, padx=(4, 0))
         ctk.CTkLabel(card, text="Vocal", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=(12, 15), sticky="w")
         self.vocal_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="gray60")
         self.vocal_name.grid(row=2, column=1, padx=12, pady=(12, 15), sticky="ew")
-        self.vocal_actions = ctk.CTkFrame(card, fg_color="transparent")
+        self.vocal_actions = ctk.CTkFrame(card, fg_color="transparent", border_width=0, corner_radius=0)
         self.vocal_actions.grid(row=2, column=2, columnspan=2, padx=(0, 16), pady=(12, 15), sticky="e")
         self.vocal_preview = ctk.CTkButton(self.vocal_actions, text="▶", command=self.toggle_vocal_preview, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
-        self.vocal_preview.grid(row=0, column=0, padx=(0, 2))
+        self.vocal_preview.grid(row=0, column=0, padx=(0, 4))
         self.vocal_download = ctk.CTkButton(self.vocal_actions, text="⬇", command=self.download_vocal, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
-        self.vocal_download.grid(row=0, column=1, padx=(2, 0))
+        self.vocal_download.grid(row=0, column=1, padx=(4, 0))
         return card
 
     def settings_ui(self, parent, row, column):
@@ -256,9 +261,9 @@ class App(ctk.CTk):
         self.output_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", width=250, text_color="orange")
         self.output_name.grid(row=0, column=1, rowspan=2, padx=12, pady=12, sticky="ew")
         self.output_preview = ctk.CTkButton(card, text="▶", command=self.toggle_output_preview, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
-        self.output_preview.grid(row=0, column=2, padx=4, pady=12)
+        self.output_preview.grid(row=0, column=2, rowspan=2, padx=4, pady=12)
         self.output_download = ctk.CTkButton(card, text="⬇", command=self.download_output, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
-        self.output_download.grid(row=0, column=3, padx=(4, 16), pady=12)
+        self.output_download.grid(row=0, column=3, rowspan=2, padx=(4, 16), pady=12)
         ctk.CTkLabel(card, text="Converted Vocal Only", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=(4, 14), sticky="w")
         self.converted_vocal_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", width=250, text_color="orange")
         self.converted_vocal_name.grid(row=2, column=1, padx=12, pady=(4, 14), sticky="ew")
@@ -390,8 +395,8 @@ class App(ctk.CTk):
         self.stop_preview()
         self.source_preview_wav = path
         self.source_path = path
-        self.source_card["name"].configure(text=path.name, text_color="green")
         self.clear_previous_processing()
+        self.source_card["name"].configure(text=path.name, text_color="green")
         print(f"{source_name} source applied: {self._display_path(path)}")
         print(f"Status: {source_name} WAV loaded as Source")
         self.separate_thread()
@@ -410,6 +415,7 @@ class App(ctk.CTk):
         self.source_path = Path(path)
         self.source_card["name"].configure(text=self.source_path.name, text_color="green")
         self.clear_previous_processing()
+        self.source_has_background = True
         print(f"Source selected: {self._display_path(self.source_path)}")
         print("Status: Source selected")
         self.separate_thread()
@@ -463,11 +469,7 @@ class App(ctk.CTk):
     def extract_audio(self, input_path, output_path, label, channels=1):
         if not self.ffmpeg:
             raise RuntimeError(f"FFmpeg was not found: {FFMPEG}")
-        command = [self.ffmpeg, "-y", "-i", str(input_path), "-vn", "-ac", str(channels), "-ar", "44100", "-c:a", "pcm_s16le", str(output_path)]
-        completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-        if completed.returncode != 0 or not output_path.exists():
-            self.log_process_output(completed.stdout)
-            raise RuntimeError(f"FFmpeg failed to extract {label} audio.")
+        convert_media_to_wav(input_path, output_path, ffmpeg_path=self.ffmpeg, channels=channels, sample_rate=44100, label=label)
         print(f"{label.title()} audio ready: {output_path}")
 
     def generate_thread(self):
@@ -512,6 +514,7 @@ class App(ctk.CTk):
             self.after(0, lambda: self.converted_vocal_preview.configure(state="normal", text="▶"))
             self.after(0, lambda: self.converted_vocal_download.configure(state="normal"))
             self.after(0, lambda: self.bottom_preview.configure(state="normal", text="▶"))
+            self.after(0, lambda: self.bottom_loop.configure(state="normal", text="⟲"))
             self.after(0, lambda: self.bottom_download.configure(state="normal"))
             print("Status: Conversion complete")
             print(f"Final output: {self._display_path(self.output_path)}")
@@ -538,6 +541,10 @@ class App(ctk.CTk):
 
     def mix_final(self):
         self.output_path = self.output_dir / "final_mix.wav"
+        if not self.source_has_background:
+            shutil.copy2(self.converted_vocal_path, self.output_path)
+            print(f"Final vocal created: {self._display_path(self.output_path)}")
+            return
         filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", "[1:a]aresample=44100,volume=5dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=1[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.instrumental_path), "-i", str(self.converted_vocal_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
@@ -561,20 +568,23 @@ class App(ctk.CTk):
     def toggle_output_preview(self):
         self.toggle_preview("output")
 
+    def toggle_output_loop_preview(self):
+        self.toggle_preview("output", loop=True)
+
     def toggle_converted_vocal_preview(self):
         self.toggle_preview("converted_vocal")
 
-    def toggle_preview(self, kind):
-        if self.preview_kind == kind:
+    def toggle_preview(self, kind, loop=False):
+        if self.preview_kind == kind and self.preview_loop == loop:
             self.stop_preview()
             return
         if kind == "source":
-            self.play_preview_path(self.source_preview_wav or self.prepare_preview(self.source_path, "source"), kind)
+            self.play_preview_path(self.source_preview_wav or self.prepare_preview(self.source_path, "source"), kind, loop=loop)
             return
         if kind == "target":
             if self.target_uvr_vocal_path and self.target_uvr_vocal_path.exists():
                 self.target_preview_wav = self.target_uvr_vocal_path
-                self.play_preview_path(self.target_preview_wav, kind)
+                self.play_preview_path(self.target_preview_wav, kind, loop=loop)
                 return
             if not self.target_path or not self.target_path.exists():
                 print("Preview unavailable: target")
@@ -587,7 +597,7 @@ class App(ctk.CTk):
             threading.Thread(target=self.prepare_target_preview_worker, daemon=True).start()
             return
         paths = {"instrumental": self.instrumental_path, "vocal": self.uvr_vocal_path, "converted_vocal": self.converted_vocal_path}
-        self.play_preview_path(paths.get(kind, self.output_path), kind)
+        self.play_preview_path(paths.get(kind, self.output_path), kind, loop=loop)
 
     def prepare_target_preview_worker(self):
         try:
@@ -602,7 +612,7 @@ class App(ctk.CTk):
         finally:
             self.target_preview_loading = False
 
-    def play_preview_path(self, path, kind):
+    def play_preview_path(self, path, kind, loop=False):
         if not path or not Path(path).exists():
             print(f"Preview unavailable: {kind}")
             return
@@ -610,18 +620,27 @@ class App(ctk.CTk):
         try:
             if sys.platform.startswith("win"):
                 import winsound
-                winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+                flags = winsound.SND_FILENAME | winsound.SND_ASYNC
+                if loop:
+                    flags |= winsound.SND_LOOP
+                winsound.PlaySound(str(path), flags)
                 self.preview_process = "winsound"
             else:
                 ffplay = shutil.which("ffplay")
                 if not ffplay:
                     raise RuntimeError("ffplay was not found.")
-                self.preview_process = subprocess.Popen([ffplay, "-nodisp", "-autoexit", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                command = [ffplay, "-nodisp", "-autoexit"]
+                if loop:
+                    command += ["-loop", "0"]
+                command.append(str(path))
+                self.preview_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.preview_kind = kind
+            self.preview_loop = loop
             self.set_preview_icons(kind)
-            print(f"Playing {kind} preview: {self._display_path(path)}")
+            print(f"Playing {kind} preview{' in loop' if loop else ''}: {self._display_path(path)}")
         except Exception as exc:
             self.preview_process = self.preview_kind = None
+            self.preview_loop = False
             self.set_preview_icons()
             print(f"Preview error: {type(exc).__name__}: {exc}")
 
@@ -641,6 +660,8 @@ class App(ctk.CTk):
         buttons = [("source", self.source_card["preview"]), ("target", self.target_card["preview"]), ("instrumental", self.instrumental_preview), ("vocal", self.vocal_preview), ("output", self.output_preview), ("converted_vocal", self.converted_vocal_preview), ("output", self.bottom_preview)]
         for kind, button in buttons:
             button.configure(text="■" if kind == active else "▶")
+        if hasattr(self, "bottom_loop"):
+            self.bottom_loop.configure(text="■" if self.preview_kind == "output" and self.preview_loop else "⟲")
 
     def stop_preview(self):
         try:
@@ -655,6 +676,7 @@ class App(ctk.CTk):
             except Exception:
                 pass
         self.preview_process = self.preview_kind = None
+        self.preview_loop = False
         if hasattr(self, "source_card"):
             self.set_preview_icons()
 
@@ -709,6 +731,7 @@ class App(ctk.CTk):
         self.instrumental_download.configure(state="disabled")
         self.vocal_download.configure(state="disabled")
         self.bottom_preview.configure(state="disabled", text="▶")
+        self.bottom_loop.configure(state="disabled", text="⟲")
         self.bottom_download.configure(state="disabled")
 
     def clear_previous_processing(self):
