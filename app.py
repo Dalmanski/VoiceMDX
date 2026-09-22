@@ -16,6 +16,19 @@ from tkinter import filedialog
 import customtkinter as ctk
 import torch
 
+try:
+    import onnxruntime as ort
+    try:
+        ort.preload_dlls()
+    except Exception:
+        pass
+    ONNX_RUNTIME_IMPORT_ERROR = None
+except Exception as exc:
+    ort = None
+    ONNX_RUNTIME_IMPORT_ERROR = exc
+
+from widgets.console_textbox import ConsoleTextBox
+
 BASE_DIR = Path(__file__).resolve().parent
 UVR_MODEL_DIR = BASE_DIR / "UVR_MODELS"
 UVR_INSTRUMENT_MODEL = UVR_MODEL_DIR / "UVR-MDX-NET-Inst_HQ_4.onnx"
@@ -28,11 +41,17 @@ TEMP_ROOT = Path(tempfile.gettempdir()) / "voicemdx_temp"
 AUDIO_EXTENSIONS = [".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".caf"]
 VIDEO_EXTENSIONS = [".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".wmv", ".m4v", ".mpeg", ".mpg", ".ts", ".mts", ".m2ts"]
 ALL_EXTENSIONS = AUDIO_EXTENSIONS + VIDEO_EXTENSIONS
-MODES = ["Singing", "Speech"]
+MODES = ["Vocalize", "Speech"]
 DIFFUSION_STEP_OPTIONS = {"Low": 25, "Recommended": 50, "High": 75, "Extreme": 100}
 FOLLOW_PITCH_OPTIONS = ["Target Voice Pitch", "Source Voice Pitch"]
 SETTINGS_FILE = BASE_DIR / "settings.json"
 DEFAULT_SETTINGS = {"appearance_mode": "system", "color_theme": "red.json"}
+SAFE_PADDING = 90
+CARD_GAP = 16
+SOURCE_TARGET_HEIGHT = 118
+PROCESS_CARD_HEIGHT = 238
+OUTPUT_CARD_HEIGHT = 250
+UVR_BATCH_SIZE = 2
 
 def load_settings():
     settings = dict(DEFAULT_SETTINGS)
@@ -101,13 +120,14 @@ except Exception as exc:
     AUDIO_SEPARATOR_IMPORT_ERROR = exc
 
 class App(ctk.CTk):
+
     def __init__(self):
         super().__init__()
         self.title("VoiceMDX - Voice Conversion in Music")
         self.geometry("1240x1080")
         self.minsize(980, 900)
         self.protocol("WM_DELETE_WINDOW", self.close_app)
-        self.mode_var = ctk.StringVar(value="Singing")
+        self.mode_var = ctk.StringVar(value="Vocalize")
         self.steps_var = ctk.IntVar(value=50)
         self.steps_choice_var = ctk.StringVar(value="Recommended")
         self.follow_pitch_var = ctk.StringVar(value="Target Voice Pitch")
@@ -135,45 +155,52 @@ class App(ctk.CTk):
             path.mkdir(parents=True, exist_ok=True)
         self.build_ui()
         self.update_config_info()
-        self.after(150, self.maximize_window)
+        self.after(100, self.maximize)
         self.log(patch_bigvgan())
         self.log(f"Offline mode: {'enabled' if offline.OFFLINE_MODE else 'disabled'}")
         self.check_environment()
         atexit.register(self.cleanup_session)
 
-    def maximize_window(self):
+    def maximize(self):
         try:
-            self.state("zoomed")
-            if sys.platform.startswith("win"):
-                self.update_idletasks()
-                import ctypes
-                hwnd = ctypes.windll.user32.GetForegroundWindow()
-                ctypes.windll.user32.ShowWindow(hwnd, 3)
-                ctypes.windll.user32.SetForegroundWindow(hwnd)
-        except Exception as exc:
-            self.log(f"Window maximize warning: {type(exc).__name__}: {exc}")
+            self.state('zoomed')
+        except Exception:
+            pass
 
     def build_ui(self):
         self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=0)
         self.grid_columnconfigure(0, weight=1)
-        outer = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        outer.grid(row=0, column=0, sticky="nsew", padx=22, pady=18)
-        outer.grid_rowconfigure(0, weight=1)
-        outer.grid_columnconfigure(0, weight=1)
-        cards = ctk.CTkScrollableFrame(outer, corner_radius=0)
+        self.safe_padding = SAFE_PADDING
+        self.card_width = max(480, (self.winfo_screenwidth() - self.safe_padding * 2 - CARD_GAP) // 2)
+        safe_zone = ctk.CTkFrame(self, corner_radius=0, border_width=0, fg_color="transparent")
+        safe_zone.grid(row=0, column=0, sticky="nsew", padx=self.safe_padding, pady=(24, 10))
+        safe_zone.grid_rowconfigure(0, weight=1)
+        safe_zone.grid_columnconfigure(0, weight=1)
+        cards = ctk.CTkScrollableFrame(safe_zone, corner_radius=0, border_width=0, fg_color="transparent")
         cards.grid(row=0, column=0, sticky="nsew")
-        cards.grid_columnconfigure(0, weight=1)
-        cards.grid_columnconfigure(1, weight=1)
+        cards.grid_columnconfigure(0, weight=0, minsize=self.card_width)
+        cards.grid_columnconfigure(1, weight=0, minsize=self.card_width)
         self.cards_scrollable = cards
         self.source_card = self.file_card(cards, 0, "1  Source", "Choose the full song, audio, or video.", self.select_source, "source")
+        self.source_card["frame"].grid(row=0, column=0, sticky="nsew", pady=(0, 8), padx=(0, 8))
         self.target_card = self.file_card(cards, 0, "2  Target Voice", "Choose the target voice reference.", self.select_target, "target")
-        self.source_card["frame"].grid(row=0, column=0, sticky="ew", pady=7, padx=(0, 8))
-        self.target_card["frame"].grid(row=0, column=1, sticky="ew", pady=7, padx=(8, 0))
-        self.stem_card = self.stem_card_ui(cards, 1)
-        self.settings_card = self.settings_ui(cards, 2)
-        self.output_card = self.output_ui(cards, 3)
-        bottom = ctk.CTkFrame(outer, corner_radius=12)
-        bottom.grid(row=1, column=0, sticky="ew", pady=(12, 8))
+        self.target_card["frame"].grid(row=0, column=1, sticky="nsew", pady=(0, 8), padx=(8, 0))
+        divider = ctk.CTkFrame(cards, width=self.card_width * 2 + CARD_GAP, height=2, corner_radius=0, border_width=0, fg_color=("gray75", "gray25"))
+        divider.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
+        self.stem_card = self.stem_card_ui(cards, 2, 0)
+        self.settings_card = self.settings_ui(cards, 2, 1)
+        self.output_card = self.output_ui(cards, 3, 0)
+        console_card = ctk.CTkFrame(cards, width=self.card_width, height=OUTPUT_CARD_HEIGHT, corner_radius=12, border_width=0)
+        console_card.grid(row=3, column=1, sticky="nsew", pady=7, padx=(8, 0))
+        console_card.grid_propagate(False)
+        console_card.grid_rowconfigure(0, weight=1)
+        console_card.grid_columnconfigure(0, weight=1)
+        self.console = ConsoleTextBox(console_card, height=OUTPUT_CARD_HEIGHT - 20, wrap="none", font=ctk.CTkFont(family="Consolas", size=11))
+        self.console.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        bottom = ctk.CTkFrame(self, width=self.card_width * 2 + CARD_GAP, height=78, corner_radius=12)
+        bottom.grid(row=1, column=0, sticky="ew", padx=self.safe_padding, pady=(0, 14))
+        bottom.grid_propagate(False)
         bottom.grid_columnconfigure(0, weight=1)
         self.generate_button = ctk.CTkButton(bottom, text="Generate Converted Vocal + Mix", command=self.generate_thread, height=52, font=ctk.CTkFont(size=16, weight="bold"))
         self.generate_button.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="ew")
@@ -183,19 +210,15 @@ class App(ctk.CTk):
         self.bottom_download.grid(row=0, column=2, padx=4, pady=12)
         self.clear_button = ctk.CTkButton(bottom, text="Clear", command=self.clear_all, height=52, width=110)
         self.clear_button.grid(row=0, column=3, padx=(8, 12), pady=12)
-        self.status_label = ctk.CTkLabel(outer, text="Ready", anchor="w", text_color="gray70")
-        self.status_label.grid(row=2, column=0, sticky="ew", pady=(0, 4))
-        self.log_box = ctk.CTkTextbox(outer, height=145, wrap="word", font=ctk.CTkFont(family="Consolas", size=11))
-        self.log_box.grid(row=3, column=0, sticky="ew")
-        self.log_box.configure(state="disabled")
 
     def file_card(self, parent, row, title, subtitle, command, kind):
-        card = ctk.CTkFrame(parent, corner_radius=12)
-        card.grid(row=row, column=0, sticky="ew", pady=7)
+        card = ctk.CTkFrame(parent, width=self.card_width, height=SOURCE_TARGET_HEIGHT, corner_radius=12)
+        card.grid(row=row, column=0, sticky="nsew", pady=7)
+        card.grid_propagate(False)
         card.grid_columnconfigure(1, weight=1)
         card.grid_columnconfigure(2, weight=0)
         ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=(16, 10), pady=(14, 4), sticky="w")
-        name = ctk.CTkLabel(card, text="No file selected", anchor="w", text_color="red")
+        name = ctk.CTkLabel(card, text="No file selected", anchor="w", width=max(220, self.card_width - 330), text_color="red")
         name.grid(row=0, column=1, padx=10, pady=(14, 4), sticky="ew")
         actions = ctk.CTkFrame(card, fg_color="transparent", border_width=0)
         actions.grid(row=0, column=2, padx=(8, 16), pady=(12, 4), sticky="e")
@@ -208,9 +231,10 @@ class App(ctk.CTk):
             tts_button.grid(row=1, column=2, padx=(8, 16), pady=(0, 10), sticky="e")
         return {"frame": card, "name": name, "preview": preview}
 
-    def stem_card_ui(self, parent, row):
-        card = ctk.CTkFrame(parent, corner_radius=12)
-        card.grid(row=row, column=0, columnspan=2, sticky="ew", pady=7)
+    def stem_card_ui(self, parent, row, column):
+        card = ctk.CTkFrame(parent, width=self.card_width, height=PROCESS_CARD_HEIGHT, corner_radius=12)
+        card.grid(row=row, column=column, sticky="nsew", pady=7, padx=(0, 8) if column == 0 else (8, 0))
+        card.grid_propagate(False)
         card.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(card, text="3  UVR Separation", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=(16, 10), pady=(15, 4), sticky="w")
         self.separate_button = ctk.CTkButton(card, text="Separate Vocal & Instrument", command=self.separate_thread, width=205, height=36, font=ctk.CTkFont(size=13, weight="bold"))
@@ -218,7 +242,7 @@ class App(ctk.CTk):
         self.separation_status = ctk.CTkLabel(card, text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange")
         self.separation_status.grid(row=1, column=0, columnspan=4, padx=16, pady=(2, 10), sticky="w")
         ctk.CTkLabel(card, text="Instrumental", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=10, sticky="w")
-        self.instrumental_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="orange")
+        self.instrumental_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="gray60")
         self.instrumental_name.grid(row=2, column=1, padx=12, pady=10, sticky="ew")
         self.instrumental_actions = ctk.CTkFrame(card, fg_color="transparent")
         self.instrumental_actions.grid(row=2, column=2, columnspan=2, padx=(0, 16), pady=10, sticky="e")
@@ -227,7 +251,7 @@ class App(ctk.CTk):
         self.instrumental_download = ctk.CTkButton(self.instrumental_actions, text="⬇", command=self.download_instrumental, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
         self.instrumental_download.grid(row=0, column=1, padx=(2, 0))
         ctk.CTkLabel(card, text="Vocal", font=ctk.CTkFont(size=14, weight="bold")).grid(row=3, column=0, padx=16, pady=(4, 15), sticky="w")
-        self.vocal_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="orange")
+        self.vocal_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="gray60")
         self.vocal_name.grid(row=3, column=1, padx=12, pady=(4, 15), sticky="ew")
         self.vocal_actions = ctk.CTkFrame(card, fg_color="transparent")
         self.vocal_actions.grid(row=3, column=2, columnspan=2, padx=(0, 16), pady=(4, 15), sticky="e")
@@ -237,9 +261,10 @@ class App(ctk.CTk):
         self.vocal_download.grid(row=0, column=1, padx=(2, 0))
         return card
 
-    def settings_ui(self, parent, row):
-        card = ctk.CTkFrame(parent, corner_radius=12)
-        card.grid(row=row, column=0, columnspan=2, sticky="ew", pady=7)
+    def settings_ui(self, parent, row, column):
+        card = ctk.CTkFrame(parent, width=self.card_width, height=PROCESS_CARD_HEIGHT, corner_radius=12)
+        card.grid(row=row, column=column, sticky="nsew", pady=7, padx=(0, 8) if column == 0 else (8, 0))
+        card.grid_propagate(False)
         card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(card, text="Seed-VC Settings", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, padx=16, pady=(14, 7), sticky="w")
         steps_frame = ctk.CTkFrame(card)
@@ -264,19 +289,20 @@ class App(ctk.CTk):
         self.config_info.grid(row=4, column=0, padx=16, pady=(3, 14), sticky="w")
         return card
 
-    def output_ui(self, parent, row):
-        card = ctk.CTkFrame(parent, corner_radius=12)
-        card.grid(row=row, column=0, columnspan=2, sticky="ew", pady=7)
+    def output_ui(self, parent, row, column):
+        card = ctk.CTkFrame(parent, width=self.card_width, height=OUTPUT_CARD_HEIGHT, corner_radius=12)
+        card.grid(row=row, column=column, sticky="nsew", pady=7, padx=(0, 8))
+        card.grid_propagate(False)
         card.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(card, text="4  Final Output", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=16, pady=(15, 4), sticky="w")
         ctk.CTkLabel(card, text="Normalized Instrumental + converted target vocal", text_color="gray70").grid(row=1, column=0, padx=16, pady=(0, 13), sticky="w")
-        self.output_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", text_color="orange")
+        self.output_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", width=250, text_color="orange")
         self.output_name.grid(row=0, column=1, rowspan=2, padx=12, pady=12, sticky="ew")
         self.output_preview = ctk.CTkButton(card, text="▶", command=self.toggle_output_preview, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
         self.output_preview.grid(row=0, column=2, padx=4, pady=12)
         self.output_download = ctk.CTkButton(card, text="⬇", command=self.download_output, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
         self.output_download.grid(row=0, column=3, padx=(4, 16), pady=12)
-        self.converted_vocal_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", text_color="orange")
+        self.converted_vocal_name = ctk.CTkLabel(card, text="Show after generate output", anchor="w", width=250, text_color="orange")
         self.converted_vocal_name.grid(row=2, column=1, padx=12, pady=(4, 14), sticky="ew")
         ctk.CTkLabel(card, text="Converted Vocal Only", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=(4, 14), sticky="w")
         self.converted_vocal_preview = ctk.CTkButton(card, text="▶", command=self.toggle_converted_vocal_preview, width=46, height=38, font=ctk.CTkFont(size=18), state="disabled")
@@ -299,10 +325,10 @@ class App(ctk.CTk):
         self.update_config_info()
 
     def update_config_info(self):
-        singing = self.mode_var.get() == "Singing"
+        vocalize = self.mode_var.get() == "Vocalize"
         target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
-        descriptions = {(True, True): "Singing in the same voice with minimal pitch change from the source.", (True, False): "Singing in the same voice with the exact same pitch as the source.", (False, True): "Speaking in the exact same voice without applying pitch from the source.", (False, False): "Speaking in the exact voice with minimal pitch change from the source."}
-        description = descriptions[(singing, target_pitch)]
+        descriptions = {(True, True): "Vocalizing in the same voice with minimal pitch change from the source.", (True, False): "Vocalizing in the same voice with the exact same pitch as the source.", (False, True): "Speaking in the exact same voice without applying pitch from the source.", (False, False): "Speaking in the exact voice with minimal pitch change from the source."}
+        description = descriptions[(vocalize, target_pitch)]
         cfg = self.get_config()
         self.config_info.configure(text=f"steps={cfg['steps']} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']}    {description}")
 
@@ -316,7 +342,7 @@ class App(ctk.CTk):
         editor_path = BASE_DIR / "tts_editor.py"
         if not editor_path.exists():
             self.log(f"TTS editor not found: {self._display_path(editor_path)}")
-            self.set_status("TTS editor not found")
+            self.log("Status: TTS editor not found")
             return
         output_path = self.inputs_dir / "tts_source.wav"
         try:
@@ -329,13 +355,13 @@ class App(ctk.CTk):
             self.tts_process = subprocess.Popen(command, cwd=str(BASE_DIR))
             self.tts_output_path = output_path
             self.log("Opening TTS Editor...")
-            self.set_status("TTS Editor opened")
+            self.log("Status: TTS Editor opened")
             self.after(250, self.check_tts_editor)
         except Exception as exc:
             self.tts_process = None
             self.tts_output_path = None
             self.log(f"TTS editor error: {type(exc).__name__}: {exc}")
-            self.set_status("Unable to open TTS Editor")
+            self.log("Status: Unable to open TTS Editor")
 
     def check_tts_editor(self):
         if self.tts_output_path and self.tts_output_path.exists() and self.tts_output_path.stat().st_size > 0:
@@ -352,7 +378,7 @@ class App(ctk.CTk):
     def apply_tts_source(self, wav_path):
         path = Path(wav_path)
         if not path.exists() or path.stat().st_size <= 0:
-            self.set_status("TTS WAV was not created")
+            self.log("Status: TTS WAV was not created")
             return
         self.stop_preview()
         self.source_preview_wav = path
@@ -361,7 +387,7 @@ class App(ctk.CTk):
         self.clear_previous_processing()
         self.source_preview_wav = path
         self.log(f"TTS source applied: {self._display_path(path)}")
-        self.set_status("TTS WAV loaded as Source")
+        self.log("Status: TTS WAV loaded as Source")
 
     def select_source(self):
         if self.generating or self.separating:
@@ -376,7 +402,7 @@ class App(ctk.CTk):
         self.clear_previous_processing()
         self.separation_complete = False
         self.log(f"Source selected: {self._display_path(self.source_path)}")
-        self.set_status("Source selected")
+        self.log("Status: Source selected")
 
     def select_target(self):
         if self.generating or self.target_preview_loading:
@@ -390,14 +416,14 @@ class App(ctk.CTk):
         self.target_path = Path(path)
         self.target_card["name"].configure(text=self.target_path.name, text_color="green")
         self.log(f"Target selected: {self._display_path(self.target_path)}")
-        self.set_status("Target selected")
+        self.log("Status: Target selected")
 
     def separate_thread(self):
         if self.generating or self.separating:
             return
         if not self.source_path:
             self.log("Select a source first.")
-            self.set_status("Select source first")
+            self.log("Status: Select source first")
             return
         threading.Thread(target=self.separate_worker, daemon=True).start()
 
@@ -408,11 +434,11 @@ class App(ctk.CTk):
             self.ensure_source_stems()
             self.separation_complete = True
             self.after(0, lambda: self.separation_status.configure(text="Seperated Voice and Instrument complete", text_color="green"))
-            self.set_status("UVR separation complete")
+            self.log("Status: UVR separation complete")
         except Exception as exc:
             self.log(f"UVR ERROR: {type(exc).__name__}: {exc}")
             self.after(0, lambda e=str(exc): self.separation_status.configure(text=f"Separation failed: {e}", text_color="orange"))
-            self.set_status("UVR separation failed")
+            self.log("Status: UVR separation failed")
         finally:
             self.separating = False
             self.after(0, lambda: self.separate_button.configure(state="normal", text="Separate Vocal & Instrument"))
@@ -450,6 +476,20 @@ class App(ctk.CTk):
         self.log(f"Normalized instrumental: {self._display_path(self.instrumental_path)}")
         self.log(f"Normalized source vocal: {self._display_path(self.uvr_vocal_path)}")
 
+    def create_uvr_separator(self, output_dir, stem_name, batch_size=UVR_BATCH_SIZE):
+        if ort is None:
+            raise RuntimeError(f"ONNX Runtime import failed: {type(ONNX_RUNTIME_IMPORT_ERROR).__name__}: {ONNX_RUNTIME_IMPORT_ERROR}")
+        providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" not in providers:
+            raise RuntimeError(f"UVR CUDAExecutionProvider is unavailable. Available providers: {providers}")
+        separator = Separator(output_dir=str(output_dir), model_file_dir=str(UVR_MODEL_DIR), output_format="WAV", sample_rate=44100, use_soundfile=True, use_autocast=False, output_single_stem=stem_name, mdx_params={"hop_length": 1024, "segment_size": 256, "overlap": 0.25, "batch_size": batch_size, "enable_denoise": False})
+        separator.load_model(model_filename=UVR_INSTRUMENT_MODEL.name if stem_name.lower() == "instrumental" else UVR_VOCAL_MODEL.name)
+        provider = getattr(separator, "onnx_execution_provider", None)
+        if provider and provider != ["CUDAExecutionProvider"]:
+            raise RuntimeError(f"UVR selected {provider} instead of CUDAExecutionProvider")
+        self.log(f"UVR CUDA: CUDAExecutionProvider | batch={batch_size}")
+        return separator
+
     def run_uvr(self, model_path, output_dir, stem_name):
         output_dir.mkdir(parents=True, exist_ok=True)
         for item in output_dir.glob("*.wav"):
@@ -458,9 +498,17 @@ class App(ctk.CTk):
             except Exception:
                 pass
         self.log(f"Loading {model_path.name}")
-        separator = Separator(output_dir=str(output_dir), model_file_dir=str(UVR_MODEL_DIR), output_format="WAV", sample_rate=44100, use_soundfile=True, use_autocast=False, output_single_stem=stem_name)
-        separator.load_model(model_filename=model_path.name)
-        result = separator.separate(str(self.source_wav))
+        separator = self.create_uvr_separator(output_dir, stem_name)
+        try:
+            result = separator.separate(str(self.source_wav))
+        except Exception as exc:
+            if UVR_BATCH_SIZE > 1 and "memory" in str(exc).lower():
+                self.log("UVR batch 2 memory error; retrying with batch 1...")
+                self.cleanup_gpu()
+                separator = self.create_uvr_separator(output_dir, stem_name, 1)
+                result = separator.separate(str(self.source_wav))
+            else:
+                raise
         paths = self.flatten_paths(result)
         discovered = sorted(output_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
         paths += [p for p in discovered if p not in paths]
@@ -491,9 +539,17 @@ class App(ctk.CTk):
             except Exception:
                 pass
         self.log(f"Cleaning target with {UVR_VOCAL_MODEL.name}")
-        separator = Separator(output_dir=str(self.target_vocal_dir), model_file_dir=str(UVR_MODEL_DIR), output_format="WAV", sample_rate=44100, use_soundfile=True, use_autocast=False, output_single_stem="Vocals")
-        separator.load_model(model_filename=UVR_VOCAL_MODEL.name)
-        result = separator.separate(str(target_input))
+        separator = self.create_uvr_separator(self.target_vocal_dir, "Vocals")
+        try:
+            result = separator.separate(str(target_input))
+        except Exception as exc:
+            if UVR_BATCH_SIZE > 1 and "memory" in str(exc).lower():
+                self.log("UVR batch 2 memory error; retrying target with batch 1...")
+                self.cleanup_gpu()
+                separator = self.create_uvr_separator(self.target_vocal_dir, "Vocals", 1)
+                result = separator.separate(str(target_input))
+            else:
+                raise
         paths = self.flatten_paths(result)
         discovered = sorted(self.target_vocal_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
         paths += [p for p in discovered if p not in paths]
@@ -552,8 +608,8 @@ class App(ctk.CTk):
     def get_config(self):
         steps = DIFFUSION_STEP_OPTIONS.get(self.steps_choice_var.get(), 50)
         target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
-        singing = self.mode_var.get() == "Singing"
-        return {"steps": steps, "cfg": 0.80, "f0": singing, "auto_f0": target_pitch if singing else not target_pitch, "pitch": 0}
+        vocalize = self.mode_var.get() == "Vocalize"
+        return {"steps": steps, "cfg": 0.80, "f0": vocalize, "auto_f0": target_pitch if vocalize else not target_pitch, "pitch": 0}
 
     def seed_command(self):
         cfg = self.get_config()
@@ -567,7 +623,7 @@ class App(ctk.CTk):
     def generate(self):
         if not self.source_path or not self.target_path:
             self.log("Source and target are required.")
-            self.set_status("Select source and target")
+            self.log("Status: Select source and target")
             return
         if not self.ffmpeg or not INFERENCE_SCRIPT.exists():
             self.check_environment()
@@ -577,13 +633,13 @@ class App(ctk.CTk):
         try:
             self.stop_preview()
             if self.separation_complete:
-                self.set_status("Preparing separated source vocal and instrumental...")
+                self.log("Status: Preparing separated source vocal and instrumental...")
                 self.ensure_source_stems()
                 seed_input = self.uvr_vocal_path
             else:
-                self.set_status("Using source as vocal only - skipping UVR separation and final mixing...")
+                self.log("Status: Using source as vocal only - skipping UVR separation and final mixing...")
                 seed_input = self.source_path
-            self.set_status("Cleaning target voice...")
+            self.log("Status: Cleaning target voice...")
             self.target_wav = self.target_uvr_vocal_path = self.run_target_uvr()
             self.prepare_seed_source(seed_input)
             cfg = self.get_config()
@@ -591,12 +647,12 @@ class App(ctk.CTk):
             self.log(f"Seed-VC strength: {cfg['cfg']:.2f}")
             self.log(f"Seed-VC F0: {cfg['f0']}")
             self.log(f"Seed-VC Follow Pitch Voice: {self.follow_pitch_var.get()}")
-            self.set_status("Running Seed-VC...")
+            self.log("Status: Running Seed-VC...")
             self.run_seed_vc()
             self.converted_vocal_path = self.normalize_audio(self.converted_vocal_path, "converted_vocal")
             self.soften_converted_vocal()
             if self.separation_complete:
-                self.set_status("Mixing final output...")
+                self.log("Status: Mixing final output...")
                 self.mix_final()
             else:
                 self.output_path = self.converted_vocal_path
@@ -608,11 +664,11 @@ class App(ctk.CTk):
             self.after(0, lambda: self.converted_vocal_download.configure(state="normal"))
             self.after(0, lambda: self.bottom_preview.configure(state="normal", text="▶"))
             self.after(0, lambda: self.bottom_download.configure(state="normal"))
-            self.set_status("Conversion complete")
+            self.log("Status: Conversion complete")
             self.log(f"Final output: {self._display_path(self.output_path)}")
         except Exception as exc:
             self.log(f"GENERATION ERROR: {type(exc).__name__}: {exc}")
-            self.set_status("Generation failed")
+            self.log("Status: Generation failed")
         finally:
             self.cleanup_gpu()
             self.generating = False
@@ -699,7 +755,7 @@ class App(ctk.CTk):
                 return
             self.target_preview_loading = True
             self.after(0, lambda: self.target_card["preview"].configure(state="disabled", text="…"))
-            self.set_status("Cleaning target for preview...")
+            self.log("Status: Cleaning target for preview...")
             threading.Thread(target=self.prepare_target_preview_worker, daemon=True).start()
             return
         paths = {"instrumental": self.instrumental_path, "vocal": self.uvr_vocal_path, "converted_vocal": self.converted_vocal_path}
@@ -709,11 +765,11 @@ class App(ctk.CTk):
         try:
             target = self.run_target_uvr()
             self.after(0, lambda: self.target_card["preview"].configure(state="normal", text="▶"))
-            self.set_status("Target vocal ready")
+            self.log("Status: Target vocal ready")
             self.after(0, lambda p=target: self.play_preview_path(p, "target"))
         except Exception as exc:
             self.log(f"TARGET PREVIEW ERROR: {type(exc).__name__}: {exc}")
-            self.set_status("Target preview failed")
+            self.log("Status: Target preview failed")
             self.after(0, lambda: self.target_card["preview"].configure(state="normal", text="▶"))
         finally:
             self.target_preview_loading = False
@@ -781,6 +837,18 @@ class App(ctk.CTk):
         self.log(f"Inst_HQ_4: {'found' if UVR_INSTRUMENT_MODEL.exists() else 'missing'}")
         self.log(f"Voc_FT: {'found' if UVR_VOCAL_MODEL.exists() else 'missing'}")
         self.log(f"audio-separator: {'available' if Separator is not None else 'missing'}")
+        self.log(f"audio-separator version: {version('audio-separator') or 'unknown'}")
+        if ort is not None:
+            self.log(f"ONNX Runtime: {version('onnxruntime-gpu') or version('onnxruntime') or 'unknown'}")
+            self.log(f"ONNX device: {ort.get_device()}")
+            self.log(f"ONNX providers: {ort.get_available_providers()}")
+            if torch.cuda.is_available() and "CUDAExecutionProvider" in ort.get_available_providers():
+                self.log("UVR inference: CUDA")
+            else:
+                problems.append("UVR CUDA provider unavailable")
+        else:
+            self.log(f"ONNX Runtime: unavailable ({type(ONNX_RUNTIME_IMPORT_ERROR).__name__}: {ONNX_RUNTIME_IMPORT_ERROR})")
+            problems.append("ONNX Runtime unavailable")
         self.log(f"protobuf: {version('protobuf') or 'unknown'}")
         if torch.cuda.is_available():
             self.log(f"CUDA: {torch.cuda.get_device_name(0)}")
@@ -799,7 +867,7 @@ class App(ctk.CTk):
             problems.append("Inst_HQ_4 missing")
         if not UVR_VOCAL_MODEL.exists():
             problems.append("Voc_FT missing")
-        self.set_status("Ready" if not problems else " | ".join(problems))
+        self.log("Status: " + ("Ready" if not problems else " | ".join(problems)))
 
     def clear_previous_output_only(self):
         self.output_path = self.converted_vocal_path = None
@@ -820,8 +888,8 @@ class App(ctk.CTk):
         self.uvr_vocal_path = self.instrumental_path = self.target_uvr_vocal_path = None
         self.target_preview_wav = None
         self.separation_complete = False
-        self.instrumental_name.configure(text="Not separated yet", text_color="orange")
-        self.vocal_name.configure(text="Not separated yet", text_color="orange")
+        self.instrumental_name.configure(text="Not separated yet", text_color="gray60")
+        self.vocal_name.configure(text="Not separated yet", text_color="gray60")
         self.instrumental_preview.configure(state="disabled", text="▶")
         self.instrumental_download.configure(state="disabled")
         self.vocal_preview.configure(state="disabled", text="▶")
@@ -835,7 +903,7 @@ class App(ctk.CTk):
         if path:
             shutil.copy2(source_path, path)
             self.log(f"Saved: {self._display_path(path)}")
-            self.set_status("WAV saved")
+            self.log("Status: WAV saved")
 
     def download_instrumental(self):
         self.download_audio(self.instrumental_path, "Save instrumental WAV", "instrumental_saved.wav")
@@ -859,10 +927,10 @@ class App(ctk.CTk):
         self.clear_previous_processing()
         self.steps_var.set(50)
         self.steps_choice_var.set("Recommended")
-        self.mode_var.set("Singing")
+        self.mode_var.set("Vocalize")
         self.follow_pitch_var.set("Target Voice Pitch")
         self.update_config_info()
-        self.set_status("Ready")
+        self.log("Status: Ready")
         self.log("Cleared.")
 
     def cleanup_gpu(self):
@@ -941,22 +1009,7 @@ class App(ctk.CTk):
         display_text = self._display_log_text(text)
         print(display_text, flush=True)
         try:
-            self.after(0, lambda t=display_text: self._append_log(t))
-        except Exception:
-            pass
-
-    def _append_log(self, text):
-        try:
-            self.log_box.configure(state="normal")
-            self.log_box.insert("end", text + "\n")
-            self.log_box.see("end")
-            self.log_box.configure(state="disabled")
-        except Exception:
-            pass
-
-    def set_status(self, text):
-        try:
-            self.after(0, lambda t=str(text): self.status_label.configure(text=t))
+            self.console.log(display_text)
         except Exception:
             pass
 
