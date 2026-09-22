@@ -36,7 +36,7 @@ def get_config(app):
     steps = DIFFUSION_STEP_OPTIONS.get(app.steps_choice_var.get(), 50)
     target_pitch = app.follow_pitch_var.get() == "Target Voice Pitch"
     vocalize = app.mode_var.get() == "Vocalize"
-    auto_f0 = target_pitch if vocalize else not target_pitch
+    auto_f0 = target_pitch
     pitch = max(MIN_SEMITONE, min(MAX_SEMITONE, int(app.semitone_var.get())))
     return {"steps": steps, "cfg": 0.80, "f0": vocalize, "auto_f0": auto_f0, "pitch": pitch}
 

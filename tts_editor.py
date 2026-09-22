@@ -13,41 +13,14 @@ import json
 import pygame
 from pathlib import Path
 from tkinter import filedialog
+from utils.centwin import center_window
+from utils.ctk_theme import configure_ctk_theme
+configure_ctk_theme()
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LANGUAGE = "en-US"
 DEFAULT_ENGINE = "Microsoft Edge Neural"
 PLACEHOLDER_TEXT = "Type something here..."
-SETTINGS_FILE = BASE_DIR / "settings.json"
-DEFAULT_SETTINGS = {"appearance_mode": "system", "color_theme": "red.json"}
-
-def load_settings():
-    settings = dict(DEFAULT_SETTINGS)
-    try:
-        if SETTINGS_FILE.exists():
-            loaded = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                settings.update(loaded)
-    except Exception:
-        settings = dict(DEFAULT_SETTINGS)
-    try:
-        SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    except Exception:
-        pass
-    return settings
-
-SETTINGS = load_settings()
-APPEARANCE_MODE = SETTINGS.get("appearance_mode", "system")
-COLOR_THEME = SETTINGS.get("color_theme", "red.json")
-THEME_FILE = BASE_DIR / "themes" / COLOR_THEME
-if not THEME_FILE.exists():
-    COLOR_THEME = DEFAULT_SETTINGS["color_theme"]
-    THEME_FILE = BASE_DIR / "themes" / COLOR_THEME
-    SETTINGS["color_theme"] = COLOR_THEME
-    try:
-        SETTINGS_FILE.write_text(json.dumps(SETTINGS, indent=2) + "\n", encoding="utf-8")
-    except Exception:
-        pass
 
 class GridSelector:
     def __init__(self, master, values=None, command=None, width=400, height=38, columns=4, gender_grouped=False):
@@ -124,12 +97,7 @@ class GridSelector:
         self.popup.after(150, self.refresh_scroll_region)
 
     def center_popup(self, width, height):
-        self.popup.update_idletasks()
-        screen_width = self.popup.winfo_screenwidth()
-        screen_height = self.popup.winfo_screenheight()
-        x = max(0, (screen_width - width) // 2)
-        y = max(0, (screen_height - height) // 2)
-        self.popup.geometry(f"{width}x{height}+{x}+{y}")
+        center_window(self.popup, width=width, height=height)
 
     def refresh_scroll_region(self):
         if self.scroll_frame is None or not self.scroll_frame.winfo_exists():
@@ -367,12 +335,7 @@ class TTSApp(ctk.CTk):
             pass
 
     def center_window(self):
-        self.update_idletasks()
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        x = max(0, (screen_width - 900) // 2)
-        y = max(0, (screen_height - 700) // 2)
-        self.geometry(f"900x700+{x}+{y}")
+        center_window(self, width=900, height=700)
 
     def create_ui(self):
         title_frame = ctk.CTkFrame(self, fg_color="transparent", border_width=0)
@@ -715,7 +678,5 @@ if __name__ == "__main__":
     apply_on_source_path = None
     if len(sys.argv) >= 3 and sys.argv[1] == "--apply-on-source":
         apply_on_source_path = sys.argv[2]
-    ctk.set_appearance_mode(APPEARANCE_MODE)
-    ctk.set_default_color_theme(str(THEME_FILE))
     app = TTSApp(apply_on_source_path=apply_on_source_path)
     app.mainloop()
