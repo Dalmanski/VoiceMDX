@@ -24,7 +24,6 @@ UVR_INSTRUMENT_MODEL = UVR_MODEL_DIR / "UVR-MDX-NET-Inst_HQ_4.onnx"
 UVR_VOCAL_MODEL = UVR_MODEL_DIR / "UVR-MDX-NET-Voc_FT.onnx"
 UVR_BATCH_SIZE = 2
 
-
 def validate(app):
     if Separator is None:
         raise RuntimeError(f"audio-separator import failed: {type(AUDIO_SEPARATOR_IMPORT_ERROR).__name__}: {AUDIO_SEPARATOR_IMPORT_ERROR}")
@@ -32,7 +31,6 @@ def validate(app):
         raise RuntimeError(f"Missing instrument model: {UVR_INSTRUMENT_MODEL}")
     if not UVR_VOCAL_MODEL.exists():
         raise RuntimeError(f"Missing vocal model: {UVR_VOCAL_MODEL}")
-
 
 def create_separator(app, output_dir, stem_name, batch_size=UVR_BATCH_SIZE):
     if ort is None:
@@ -48,7 +46,6 @@ def create_separator(app, output_dir, stem_name, batch_size=UVR_BATCH_SIZE):
     app.log(f"UVR CUDA: CUDAExecutionProvider | batch={batch_size}")
     return separator
 
-
 def flatten_paths(value):
     if isinstance(value, (str, Path)):
         return [Path(value)]
@@ -61,11 +58,9 @@ def flatten_paths(value):
         return result
     return []
 
-
 def pick_stem_path(paths, name):
     key = name.lower()
     return next((path for path in paths if path.exists() and key in path.stem.lower()), None)
-
 
 def separate(app, input_path, model_path, output_dir, stem_name, retry_message, missing_message):
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -92,7 +87,6 @@ def separate(app, input_path, model_path, output_dir, stem_name, retry_message, 
         raise RuntimeError(missing_message)
     return selected
 
-
 def ensure_source_stems(app):
     if app.instrumental_path and app.instrumental_path.exists() and app.uvr_vocal_path and app.uvr_vocal_path.exists():
         return
@@ -101,7 +95,6 @@ def ensure_source_stems(app):
     if not app.ffmpeg:
         raise RuntimeError(f"FFmpeg was not found: {app.ffmpeg}")
     validate(app)
-    app.after(0, lambda: app.separation_status.configure(text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange"))
     app.source_wav = app.inputs_dir / "source.wav"
     app.extract_audio(app.source_path, app.source_wav, "source", 2)
     app.instrumental_path = separate(app, app.source_wav, UVR_INSTRUMENT_MODEL, app.instrumental_dir, "Instrumental", "UVR batch 2 memory error; retrying with batch 1...", f"{UVR_INSTRUMENT_MODEL.name} did not produce Instrumental.wav")
@@ -110,17 +103,14 @@ def ensure_source_stems(app):
     app.cleanup_gpu()
     app.instrumental_path = app.normalize_audio(app.instrumental_path, "instrumental")
     app.uvr_vocal_path = app.normalize_audio(app.uvr_vocal_path, "source_vocal")
-    app.separation_complete = True
     app.after(0, lambda: app.instrumental_name.configure(text=app.instrumental_path.name, text_color="green"))
     app.after(0, lambda: app.vocal_name.configure(text=app.uvr_vocal_path.name, text_color="green"))
-    app.after(0, lambda: app.separation_status.configure(text="Seperated Voice and Instrument complete", text_color="green"))
     app.after(0, lambda: app.instrumental_preview.configure(state="normal"))
     app.after(0, lambda: app.instrumental_download.configure(state="normal"))
     app.after(0, lambda: app.vocal_preview.configure(state="normal"))
     app.after(0, lambda: app.vocal_download.configure(state="normal"))
     app.log(f"Normalized instrumental: {app._display_path(app.instrumental_path)}")
     app.log(f"Normalized source vocal: {app._display_path(app.uvr_vocal_path)}")
-
 
 def run_target_uvr(app):
     if not app.target_path or not app.target_path.exists():

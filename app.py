@@ -82,7 +82,7 @@ class App(ctk.CTk):
         self.mic_process = None
         self.mic_output_path = None
         self.process = self.preview_process = self.preview_kind = None
-        self.generating = self.separating = self.target_preview_loading = self.separation_complete = False
+        self.generating = self.separating = self.target_preview_loading = False
         self.ffmpeg = str(FFMPEG) if FFMPEG.exists() else None
         self.session_dir = TEMP_ROOT / f"session_{os.getpid()}_{int(time.time())}"
         self.inputs_dir = self.session_dir / "inputs"
@@ -184,25 +184,21 @@ class App(ctk.CTk):
         card.grid(row=row, column=column, sticky="nsew", pady=7, padx=(0, 8) if column == 0 else (8, 0))
         card.grid_propagate(False)
         card.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(card, text="📌 UVR Separation", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=(16, 10), pady=(15, 4), sticky="w")
-        self.separate_button = ctk.CTkButton(card, text="Separate Vocal & Instrument", command=self.separate_thread, width=205, height=36, font=ctk.CTkFont(size=13, weight="bold"))
-        self.separate_button.grid(row=0, column=2, padx=(10, 16), pady=(12, 4), sticky="e")
-        self.separation_status = ctk.CTkLabel(card, text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange")
-        self.separation_status.grid(row=1, column=0, columnspan=4, padx=16, pady=(2, 10), sticky="w")
-        ctk.CTkLabel(card, text="Instrumental", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=10, sticky="w")
+        ctk.CTkLabel(card, text="📌 UVR Separation", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=(16, 10), pady=(15, 12), sticky="w")
+        ctk.CTkLabel(card, text="Inst / BG", font=ctk.CTkFont(size=14, weight="bold")).grid(row=1, column=0, padx=16, pady=12, sticky="w")
         self.instrumental_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="gray60")
-        self.instrumental_name.grid(row=2, column=1, padx=12, pady=10, sticky="ew")
+        self.instrumental_name.grid(row=1, column=1, padx=12, pady=12, sticky="ew")
         self.instrumental_actions = ctk.CTkFrame(card, fg_color="transparent")
-        self.instrumental_actions.grid(row=2, column=2, columnspan=2, padx=(0, 16), pady=10, sticky="e")
+        self.instrumental_actions.grid(row=1, column=2, columnspan=2, padx=(0, 16), pady=12, sticky="e")
         self.instrumental_preview = ctk.CTkButton(self.instrumental_actions, text="▶", command=self.toggle_instrumental_preview, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
         self.instrumental_preview.grid(row=0, column=0, padx=(0, 2))
         self.instrumental_download = ctk.CTkButton(self.instrumental_actions, text="⬇", command=self.download_instrumental, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
         self.instrumental_download.grid(row=0, column=1, padx=(2, 0))
-        ctk.CTkLabel(card, text="Vocal", font=ctk.CTkFont(size=14, weight="bold")).grid(row=3, column=0, padx=16, pady=(4, 15), sticky="w")
+        ctk.CTkLabel(card, text="Vocal", font=ctk.CTkFont(size=14, weight="bold")).grid(row=2, column=0, padx=16, pady=(12, 15), sticky="w")
         self.vocal_name = ctk.CTkLabel(card, text="Not separated yet", anchor="w", text_color="gray60")
-        self.vocal_name.grid(row=3, column=1, padx=12, pady=(4, 15), sticky="ew")
+        self.vocal_name.grid(row=2, column=1, padx=12, pady=(12, 15), sticky="ew")
         self.vocal_actions = ctk.CTkFrame(card, fg_color="transparent")
-        self.vocal_actions.grid(row=3, column=2, columnspan=2, padx=(0, 16), pady=(4, 15), sticky="e")
+        self.vocal_actions.grid(row=2, column=2, columnspan=2, padx=(0, 16), pady=(12, 15), sticky="e")
         self.vocal_preview = ctk.CTkButton(self.vocal_actions, text="▶", command=self.toggle_vocal_preview, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
         self.vocal_preview.grid(row=0, column=0, padx=(0, 2))
         self.vocal_download = ctk.CTkButton(self.vocal_actions, text="⬇", command=self.download_vocal, width=46, height=36, font=ctk.CTkFont(size=18), state="disabled")
@@ -398,6 +394,7 @@ class App(ctk.CTk):
         self.clear_previous_processing()
         print(f"{source_name} source applied: {self._display_path(path)}")
         print(f"Status: {source_name} WAV loaded as Source")
+        self.separate_thread()
 
     def apply_tts_source(self, wav_path):
         self.apply_source_file(wav_path, "TTS")
@@ -413,9 +410,9 @@ class App(ctk.CTk):
         self.source_path = Path(path)
         self.source_card["name"].configure(text=self.source_path.name, text_color="green")
         self.clear_previous_processing()
-        self.separation_complete = False
         print(f"Source selected: {self._display_path(self.source_path)}")
         print("Status: Source selected")
+        self.separate_thread()
 
     def select_target(self):
         if self.generating or self.target_preview_loading:
@@ -442,19 +439,15 @@ class App(ctk.CTk):
 
     def separate_worker(self):
         self.separating = True
-        self.after(0, lambda: self.separate_button.configure(state="disabled", text="Separating..."))
+        print("Status: Automatically separating source vocal and Inst / BG...")
         try:
             uvr_mdx.ensure_source_stems(self)
-            self.separation_complete = True
-            self.after(0, lambda: self.separation_status.configure(text="Seperated Voice and Instrument complete", text_color="green"))
             print("Status: UVR separation complete")
         except Exception as exc:
             print(f"UVR ERROR: {type(exc).__name__}: {exc}")
-            self.after(0, lambda e=str(exc): self.separation_status.configure(text=f"Separation failed: {e}", text_color="orange"))
             print("Status: UVR separation failed")
         finally:
             self.separating = False
-            self.after(0, lambda: self.separate_button.configure(state="normal", text="Separate Vocal & Instrument"))
 
     def normalize_audio(self, input_path, name):
         if not self.ffmpeg:
@@ -494,13 +487,9 @@ class App(ctk.CTk):
         self.after(0, lambda: self.generate_button.configure(state="disabled", text="Converting + Mixing..."))
         try:
             self.stop_preview()
-            if self.separation_complete:
-                print("Status: Preparing separated source vocal and instrumental...")
-                uvr_mdx.ensure_source_stems(self)
-                seed_input = self.uvr_vocal_path
-            else:
-                print("Status: Using source as vocal only - skipping UVR separation and final mixing...")
-                seed_input = self.source_path
+            print("Status: Preparing separated source vocal and Inst / BG...")
+            uvr_mdx.ensure_source_stems(self)
+            seed_input = self.uvr_vocal_path
             print("Status: Cleaning target voice...")
             self.target_wav = self.target_uvr_vocal_path = uvr_mdx.run_target_uvr(self)
             seed_vc.prepare_source(self, seed_input)
@@ -514,11 +503,8 @@ class App(ctk.CTk):
             seed_vc.run(self)
             self.converted_vocal_path = self.normalize_audio(self.converted_vocal_path, "converted_vocal")
             self.soften_converted_vocal()
-            if self.separation_complete:
-                print("Status: Mixing final output...")
-                self.mix_final()
-            else:
-                self.output_path = self.converted_vocal_path
+            print("Status: Mixing final output...")
+            self.mix_final()
             self.after(0, lambda: self.output_name.configure(text=self.output_path.name, text_color="green"))
             self.after(0, lambda: self.converted_vocal_name.configure(text=self.converted_vocal_path.name, text_color="green"))
             self.after(0, lambda: self.output_preview.configure(state="normal", text="▶"))
@@ -730,14 +716,12 @@ class App(ctk.CTk):
         self.source_wav = self.target_wav = self.seed_source_wav = None
         self.uvr_vocal_path = self.instrumental_path = self.target_uvr_vocal_path = None
         self.target_preview_wav = None
-        self.separation_complete = False
         self.instrumental_name.configure(text="Not separated yet", text_color="gray60")
         self.vocal_name.configure(text="Not separated yet", text_color="gray60")
         self.instrumental_preview.configure(state="disabled", text="▶")
         self.instrumental_download.configure(state="disabled")
         self.vocal_preview.configure(state="disabled", text="▶")
         self.vocal_download.configure(state="disabled")
-        self.separation_status.configure(text="Only Source Voice. If you have instrument on your source, Click Seperate.", text_color="orange")
         self.update_config_info()
 
     def download_audio(self, source_path, title, initialfile):
