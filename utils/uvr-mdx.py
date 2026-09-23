@@ -103,7 +103,7 @@ def separate(app, input_path, model_path, output_dir, stem_name, retry_message, 
     return selected
 
 def ensure_source_stems(app):
-    if app.instrumental_path and app.instrumental_path.exists() and app.uvr_vocal_path and app.uvr_vocal_path.exists():
+    if app.inst_path and app.inst_path.exists() and app.uvr_vocal_path and app.uvr_vocal_path.exists():
         return
     if not app.source_path or not app.source_path.exists():
         raise RuntimeError("Source audio or video was not found.")
@@ -111,28 +111,32 @@ def ensure_source_stems(app):
         raise RuntimeError(f"FFmpeg was not found: {app.ffmpeg}")
     validate(app)
     app.source_wav = app.inputs_dir / "source.wav"
-    app.extract_audio(app.source_path, app.source_wav, "source", 2)
+    app.ext_audio(app.source_path, app.source_wav, "source", 2)
     app.uvr_vocal_path = separate(app, app.source_wav, UVR_VOCAL_MODEL, app.vocal_dir, "Vocals", "UVR batch 2 memory error; retrying with batch 1...", f"{UVR_VOCAL_MODEL.name} did not produce Vocals.wav")
     app.cleanup_gpu()
-    app.source_has_background = has_background(app.source_wav, app.uvr_vocal_path)
-    app.log(f"Source background detected: {'yes' if app.source_has_background else 'no'}")
-    if app.source_has_background:
+    app.has_background = has_background(app.source_wav, app.uvr_vocal_path)
+    app.log(f"Source background detected: {'yes' if app.has_background else 'no'}")
+    if app.has_background:
         if not UVR_INSTRUMENT_MODEL.exists():
             raise RuntimeError(f"Missing instrument model: {UVR_INSTRUMENT_MODEL}")
-        app.instrumental_path = separate(app, app.source_wav, UVR_INSTRUMENT_MODEL, app.instrumental_dir, "Instrumental", "UVR batch 2 memory error; retrying with batch 1...", f"{UVR_INSTRUMENT_MODEL.name} did not produce Instrumental.wav")
+        app.inst_path = separate(app, app.source_wav, UVR_INSTRUMENT_MODEL, app.inst_dir, "Instrumental", "UVR batch 2 memory error; retrying with batch 1...", f"{UVR_INSTRUMENT_MODEL.name} did not produce Instrumental.wav")
         app.cleanup_gpu()
-        app.instrumental_path = app.normalize_audio(app.instrumental_path, "instrumental")
+        app.inst_path = app.norm_audio(app.inst_path, "instrumental")
     else:
-        app.after(0, lambda: app.instrumental_name.configure(text="No Instrument/BG yet, only vocal", text_color="yellow"))
-    app.uvr_vocal_path = app.normalize_audio(app.uvr_vocal_path, "source_vocal")
-    if app.source_has_background:
-        app.after(0, lambda: app.instrumental_name.configure(text=app.instrumental_path.name, text_color="green"))
-        app.after(0, lambda: app.instrumental_preview.configure(state="normal"))
-        app.after(0, lambda: app.instrumental_download.configure(state="normal"))
+        app.inst_path = None
+        app.after(0, lambda: app.inst_name.configure(text="Vocal only on source", text_color="yellow"))
+    app.uvr_vocal_path = app.norm_audio(app.uvr_vocal_path, "source_vocal")
+    if app.has_background:
+        app.after(0, lambda: app.inst_name.configure(text=app.inst_path.name, text_color="green"))
+        app.after(0, lambda: app.inst_prev.configure(state="normal"))
+        app.after(0, lambda: app.inst_dl.configure(state="normal"))
     app.after(0, lambda: app.vocal_name.configure(text=app.uvr_vocal_path.name, text_color="green"))
-    app.after(0, lambda: app.vocal_preview.configure(state="normal"))
-    app.after(0, lambda: app.vocal_download.configure(state="normal"))
-    app.log(f"Normalized instrumental: {app._display_path(app.instrumental_path)}")
+    app.after(0, lambda: app.vocal_prev.configure(state="normal"))
+    app.after(0, lambda: app.vocal_dl.configure(state="normal"))
+    if app.inst_path:
+        app.log(f"Normalized instrumental: {app._display_path(app.inst_path)}")
+    else:
+        app.log("Normalized instrumental: not available (no instrument/BG detected)")
     app.log(f"Normalized source vocal: {app._display_path(app.uvr_vocal_path)}")
 
 def run_target_uvr(app):
@@ -142,10 +146,10 @@ def run_target_uvr(app):
         raise RuntimeError(f"FFmpeg was not found: {app.ffmpeg}")
     validate(app)
     target_input = app.inputs_dir / "target.wav"
-    app.extract_audio(app.target_path, target_input, "target", 1)
+    app.ext_audio(app.target_path, target_input, "target", 1)
     selected = separate(app, target_input, UVR_VOCAL_MODEL, app.target_vocal_dir, "Vocals", "UVR batch 2 memory error; retrying target with batch 1...", "Voc_FT did not produce a cleaned target vocal.")
-    app.target_uvr_vocal_path = app.normalize_audio(selected, "target_vocal")
-    app.target_wav = app.target_preview_wav = app.target_uvr_vocal_path
-    app.log(f"Clean target vocal: {app._display_path(app.target_uvr_vocal_path)}")
+    app.target_vocal_path = app.norm_audio(selected, "target_vocal")
+    app.target_wav = app.target_preview_wav = app.target_vocal_path
+    app.log(f"Clean target vocal: {app._display_path(app.target_vocal_path)}")
     app.cleanup_gpu()
-    return app.target_uvr_vocal_path
+    return app.target_vocal_path

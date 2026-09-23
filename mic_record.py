@@ -47,110 +47,78 @@ class MicRecorderApp(ctk.CTk):
     def build_ui(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
-
         title = ctk.CTkLabel(self, text="Microphone Recorder", font=ctk.CTkFont(size=28, weight="bold"))
         title.grid(row=0, column=0, padx=35, pady=(25, 18), sticky="w")
-
         device_frame = ctk.CTkFrame(self)
         device_frame.grid(row=1, column=0, padx=35, pady=(0, 15), sticky="ew")
         device_frame.grid_columnconfigure(1, weight=1)
-
         device_label = ctk.CTkLabel(device_frame, text="MICROPHONE", font=ctk.CTkFont(size=13, weight="bold"))
         device_label.grid(row=0, column=0, padx=(20, 15), pady=18)
-
         self.device_menu = ctk.CTkOptionMenu(device_frame, values=["No active microphone found"], height=40)
         self.device_menu.grid(row=0, column=1, padx=10, pady=18, sticky="ew")
-
         self.refresh_button = ctk.CTkButton(device_frame, text="REFRESH", width=110, height=40, command=self.refresh_devices)
         self.refresh_button.grid(row=0, column=2, padx=(10, 20), pady=18)
-
-        content = ctk.CTkFrame(self, fg_color="transparent")
+        content = ctk.CTkFrame(self, fg_color="transparent", border_width=0, corner_radius=0)
         content.grid(row=2, column=0, padx=35, pady=(0, 15), sticky="nsew")
         content.grid_columnconfigure(0, weight=3)
         content.grid_columnconfigure(1, weight=1)
         content.grid_rowconfigure(0, weight=1)
-
         record_frame = ctk.CTkFrame(content)
         record_frame.grid(row=0, column=0, padx=(0, 8), sticky="nsew")
         record_frame.grid_columnconfigure(0, weight=1)
-
-        record_header = ctk.CTkFrame(record_frame, fg_color="transparent")
+        record_header = ctk.CTkFrame(record_frame, fg_color="transparent", border_width=0, corner_radius=0)
         record_header.grid(row=0, column=0, padx=22, pady=(20, 8), sticky="ew")
         record_header.grid_columnconfigure(0, weight=1)
-
         record_title = ctk.CTkLabel(record_header, text="RECORDING", font=ctk.CTkFont(size=18, weight="bold"))
         record_title.grid(row=0, column=0, sticky="w")
-
         self.indicator_label = ctk.CTkLabel(record_header, text="● READY", font=ctk.CTkFont(size=13, weight="bold"), text_color="gray")
         self.indicator_label.grid(row=0, column=1, sticky="e")
-
         self.status_label = ctk.CTkLabel(record_frame, text="Ready to record", font=ctk.CTkFont(size=14))
         self.status_label.grid(row=1, column=0, padx=20, pady=(10, 0))
-
         self.timer_label = ctk.CTkLabel(record_frame, text="00:00", font=ctk.CTkFont(size=52, weight="bold"))
         self.timer_label.grid(row=2, column=0, padx=20, pady=(5, 25))
-
-        controls = ctk.CTkFrame(record_frame, fg_color="transparent")
+        controls = ctk.CTkFrame(record_frame, fg_color="transparent", border_width=0, corner_radius=0)
         controls.grid(row=3, column=0, padx=20, pady=(0, 20))
-
         self.record_button = ctk.CTkButton(controls, text="RECORD", width=160, height=44, command=self.toggle_recording)
         self.record_button.grid(row=0, column=0, padx=6)
-
         self.stop_button = ctk.CTkButton(controls, text="STOP", width=160, height=44, command=self.stop_recording, state="disabled")
         self.stop_button.grid(row=0, column=1, padx=6)
-
         info_label = ctk.CTkLabel(record_frame, text="Click RECORD to start. Use PAUSE/PLAY to control the current recording.", font=ctk.CTkFont(size=12))
         info_label.grid(row=4, column=0, padx=20, pady=(0, 22))
-
         volume_frame = ctk.CTkFrame(content)
         volume_frame.grid(row=0, column=1, padx=(8, 0), sticky="nsew")
-
         volume_title = ctk.CTkLabel(volume_frame, text="INPUT VOLUME", font=ctk.CTkFont(size=15, weight="bold"))
         volume_title.pack(pady=(25, 10))
-
         self.volume_bar = ctk.CTkProgressBar(volume_frame, orientation="vertical", width=34, height=220)
         self.volume_bar.pack(pady=10)
         self.volume_bar.set(0)
-
         self.volume_label = ctk.CTkLabel(volume_frame, text="0%", font=ctk.CTkFont(size=14, weight="bold"))
         self.volume_label.pack(pady=(8, 2))
-
         volume_hint = ctk.CTkLabel(volume_frame, text="Live input level", font=ctk.CTkFont(size=12))
         volume_hint.pack(pady=(0, 20))
-
         preview_frame = ctk.CTkFrame(self)
         preview_frame.grid(row=3, column=0, padx=35, pady=(0, 25), sticky="ew")
         preview_frame.grid_columnconfigure(0, weight=1)
-
-        preview_header = ctk.CTkFrame(preview_frame, fg_color="transparent")
+        preview_header = ctk.CTkFrame(preview_frame, fg_color="transparent", border_width=0, corner_radius=0)
         preview_header.grid(row=0, column=0, padx=22, pady=(18, 5), sticky="ew")
         preview_header.grid_columnconfigure(0, weight=1)
-
         preview_title = ctk.CTkLabel(preview_header, text="AUDIO PREVIEW", font=ctk.CTkFont(size=18, weight="bold"))
         preview_title.grid(row=0, column=0, sticky="w")
-
         self.preview_status_label = ctk.CTkLabel(preview_header, text="No recording", font=ctk.CTkFont(size=13))
         self.preview_status_label.grid(row=0, column=1, sticky="e")
-
         self.preview_label = ctk.CTkLabel(preview_frame, text="Your recorded audio will appear here after you stop recording.", font=ctk.CTkFont(size=13))
         self.preview_label.grid(row=1, column=0, padx=20, pady=(4, 12))
-
         self.preview_progress = ctk.CTkProgressBar(preview_frame, height=8)
         self.preview_progress.grid(row=2, column=0, padx=30, pady=(0, 8), sticky="ew")
         self.preview_progress.set(0)
-
         self.preview_timer_label = ctk.CTkLabel(preview_frame, text="00:00 / 00:00", font=ctk.CTkFont(size=18, weight="bold"))
         self.preview_timer_label.grid(row=3, column=0, padx=20, pady=5)
-
-        preview_controls = ctk.CTkFrame(preview_frame, fg_color="transparent")
+        preview_controls = ctk.CTkFrame(preview_frame, fg_color="transparent", border_width=0, corner_radius=0)
         preview_controls.grid(row=4, column=0, padx=20, pady=(8, 20))
-
         self.preview_button = ctk.CTkButton(preview_controls, text="PLAY", width=150, height=42, command=self.toggle_preview, state="disabled")
         self.preview_button.grid(row=0, column=0, padx=6)
-
         self.save_button = ctk.CTkButton(preview_controls, text="SAVE AS WAV", width=150, height=42, command=self.save_as_wav, state="disabled")
         self.save_button.grid(row=0, column=1, padx=6)
-
         self.apply_button = ctk.CTkButton(preview_controls, text="APPLY ON SOURCE", width=180, height=42, command=self.apply_source, state="normal" if self.apply_on_source_path else "disabled")
         self.apply_button.grid(row=0, column=2, padx=6)
 

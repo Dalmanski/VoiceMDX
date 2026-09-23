@@ -9,7 +9,6 @@ import shutil
 import tempfile
 import time
 import sys
-import json
 import pygame
 from pathlib import Path
 from tkinter import filedialog
@@ -17,13 +16,97 @@ from utils.centwin import center_window
 from utils.ctk_theme import configure_ctk_theme
 configure_ctk_theme()
 
-BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LANGUAGE = "en-US"
 DEFAULT_ENGINE = "Microsoft Edge Neural"
 PLACEHOLDER_TEXT = "Type something here..."
+SELECTOR_POPUP_HEIGHT = 700
+TAG_POPUP_HEIGHT = 500
+
+class MultiTagSelector:
+    def __init__(self, master, title, selected=None, options=None, command=None, width=600):
+        self.master = master
+        self.title = title
+        self.selected = set(selected or [])
+        self.options = sorted(set(options or []), key=str.lower)
+        self.command = command
+        self.popup = None
+        self.variables = {}
+        self.button = ctk.CTkButton(master, text=title, height=36, width=width, anchor="w", command=self.open)
+
+    def grid(self, **kwargs):
+        self.button.grid(**kwargs)
+
+    def set_options(self, options):
+        self.options = sorted(set(options or []), key=str.lower)
+        self.selected.intersection_update(self.options)
+        self.update_button()
+
+    def update_button(self):
+        if not self.selected:
+            text = self.title
+        else:
+            selected = sorted(self.selected, key=str.lower)
+            text = " · ".join(selected[:2])
+            if len(selected) > 2:
+                text = f"{text} +{len(selected) - 2}"
+        self.button.configure(text=text)
+
+    def open(self):
+        if self.popup is not None and self.popup.winfo_exists():
+            self.popup.destroy()
+        self.popup = ctk.CTkToplevel(self.master.winfo_toplevel())
+        self.popup.title("Select Tags")
+        self.popup.transient(self.master.winfo_toplevel())
+        self.popup.resizable(False, False)
+        width = 560
+        height = TAG_POPUP_HEIGHT
+        center_window(self.popup, width=width, height=height)
+        self.popup.grid_rowconfigure(1, weight=1)
+        self.popup.grid_columnconfigure(0, weight=1)
+        title = ctk.CTkLabel(self.popup, text=self.title, font=ctk.CTkFont(size=16, weight="bold"))
+        title.grid(row=0, column=0, padx=16, pady=(16, 10), sticky="w")
+        frame = ctk.CTkScrollableFrame(self.popup, width=width - 32, height=height - 120, corner_radius=10)
+        frame.grid(row=1, column=0, padx=16, pady=(0, 10), sticky="nsew")
+        self.variables = {}
+        for index, option in enumerate(self.options):
+            variable = ctk.BooleanVar(value=option in self.selected)
+            checkbox = ctk.CTkCheckBox(frame, text=option, variable=variable, command=lambda value=option: self.toggle(value))
+            checkbox.grid(row=index // 2, column=index % 2, padx=8, pady=6, sticky="w")
+            self.variables[option] = variable
+        if not self.options:
+            label = ctk.CTkLabel(frame, text="No tags available.", text_color="gray")
+            label.grid(row=0, column=0, padx=10, pady=20)
+        buttons = ctk.CTkFrame(self.popup, fg_color="transparent", border_width=0)
+        buttons.grid(row=2, column=0, padx=16, pady=(0, 14), sticky="e")
+        clear_button = ctk.CTkButton(buttons, text="Clear", width=90, height=34, command=self.clear)
+        clear_button.grid(row=0, column=0, padx=(0, 8))
+        done_button = ctk.CTkButton(buttons, text="Done", width=90, height=34, command=self.close)
+        done_button.grid(row=0, column=1)
+
+    def toggle(self, value):
+        variable = self.variables.get(value)
+        if variable is not None and variable.get():
+            self.selected.add(value)
+        else:
+            self.selected.discard(value)
+        self.update_button()
+        if self.command:
+            self.command(set(self.selected))
+
+    def clear(self):
+        self.selected.clear()
+        self.update_button()
+        for variable in self.variables.values():
+            variable.set(False)
+        if self.command:
+            self.command(set())
+
+    def close(self):
+        if self.popup is not None and self.popup.winfo_exists():
+            self.popup.destroy()
 
 class GridSelector:
-    def __init__(self, master, values=None, command=None, width=400, height=38, columns=4, gender_grouped=False):
+    def __init__(self, master, values=None, command=None, width=400, height=38, columns=4, gender_grouped=False, compact=False):
         self.master = master
         self.values = values or []
         self.items = []
@@ -32,11 +115,17 @@ class GridSelector:
         self.height = height
         self.columns = columns
         self.gender_grouped = gender_grouped
+        self.compact = compact
+        self.content_options = []
+        self.personality_options = []
+        self.content_selected = set()
+        self.personality_selected = set()
         self.value = ""
         self.popup = None
         self.search_entry = None
         self.scroll_frame = None
         self.button = ctk.CTkButton(master, text="", width=width, height=height, anchor="w", command=self.open)
+
     def grid(self, **kwargs):
         self.button.grid(**kwargs)
 
@@ -60,6 +149,10 @@ class GridSelector:
         if "items" in kwargs:
             self.items = kwargs["items"] or []
             self.values = [i["value"] for i in self.items]
+            self.content_options = sorted({tag for item in self.items for tag in item.get("content_categories", [])}, key=str.lower)
+            self.personality_options = sorted({tag for item in self.items for tag in item.get("voice_personalities", [])}, key=str.lower)
+            self.content_selected.intersection_update(self.content_options)
+            self.personality_selected.intersection_update(self.personality_options)
         button_kwargs = {k: v for k, v in kwargs.items() if k not in ("values", "items")}
         if button_kwargs:
             self.button.configure(**button_kwargs)
@@ -72,29 +165,37 @@ class GridSelector:
         self.popup.transient(self.master.winfo_toplevel())
         self.popup.grab_set()
         self.popup.resizable(False, True)
-        popup_width = 1200
-        item_count = max(1, len(self.items))
-        popup_height = min(max(300, 220 + min(item_count, 16) * 28), 620)
+        popup_width = 1260 if self.compact else 900
+        popup_height = SELECTOR_POPUP_HEIGHT
         self.center_popup(popup_width, popup_height)
-        self.popup.grid_rowconfigure(0, weight=0)
-        self.popup.grid_rowconfigure(1, weight=0)
-        self.popup.grid_rowconfigure(2, weight=1)
         self.popup.grid_columnconfigure(0, weight=1)
-        title = ctk.CTkLabel(self.popup, text="Select", font=ctk.CTkFont(size=17, weight="bold"))
-        title.grid(row=0, column=0, padx=15, pady=(15, 8), sticky="w")
+        title = ctk.CTkLabel(self.popup, text="Select", font=ctk.CTkFont(size=19, weight="bold"))
+        title.grid(row=0, column=0, padx=18, pady=(16, 10), sticky="w")
         search_frame = ctk.CTkFrame(self.popup, fg_color="transparent", border_width=0)
-        search_frame.grid(row=1, column=0, padx=15, pady=(0, 10), sticky="ew")
+        search_frame.grid(row=1, column=0, padx=18, pady=(0, 10), sticky="ew")
         search_frame.grid_columnconfigure(0, weight=1)
-        self.search_entry = ctk.CTkEntry(search_frame, placeholder_text="Search...")
+        self.search_entry = ctk.CTkEntry(search_frame, placeholder_text="Search...", height=40, font=ctk.CTkFont(size=14))
         self.search_entry.grid(row=0, column=0, sticky="ew")
         self.search_entry.bind("<KeyRelease>", self.filter_items)
-        self.scroll_frame = ctk.CTkScrollableFrame(self.popup, width=popup_width - 30, height=popup_height - 115, corner_radius=12)
-        self.scroll_frame.grid(row=2, column=0, padx=15, pady=(0, 15), sticky="nsew")
+        results_row = 2
+        results_height = popup_height - 115
+        if self.compact:
+            tag_frame = ctk.CTkFrame(self.popup, fg_color="transparent", border_width=0)
+            tag_frame.grid(row=2, column=0, padx=18, pady=(0, 10), sticky="ew")
+            tag_frame.grid_columnconfigure(0, weight=1)
+            tag_frame.grid_columnconfigure(1, weight=1)
+            content_filter = MultiTagSelector(tag_frame, "All Content Categories", self.content_selected, self.content_options, lambda selected: self.tag_filter_changed("content", selected), width=(popup_width - 55) // 2)
+            content_filter.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+            personality_filter = MultiTagSelector(tag_frame, "All Voice Personalities", self.personality_selected, self.personality_options, lambda selected: self.tag_filter_changed("personality", selected), width=(popup_width - 55) // 2)
+            personality_filter.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+            results_row = 3
+            results_height = popup_height - 165
+        self.popup.grid_rowconfigure(results_row, weight=1)
+        self.scroll_frame = ctk.CTkScrollableFrame(self.popup, width=popup_width - 36, height=results_height, corner_radius=12)
+        self.scroll_frame.grid(row=results_row, column=0, padx=18, pady=(0, 18), sticky="nsew")
         self.configure_columns()
         self.render_items()
         self.popup.after_idle(self.refresh_scroll_region)
-        self.popup.after(50, self.refresh_scroll_region)
-        self.popup.after(150, self.refresh_scroll_region)
 
     def center_popup(self, width, height):
         center_window(self.popup, width=width, height=height)
@@ -109,9 +210,21 @@ class GridSelector:
 
     def get_filtered_items(self):
         search_text = self.search_entry.get().strip().lower() if self.search_entry is not None else ""
-        if not search_text:
-            return self.items
-        return [item for item in self.items if search_text in item["value"].lower() or search_text in item["display"].lower() or search_text in item["gender"].lower()]
+        items = self.items
+        if search_text:
+            items = [item for item in items if search_text in item["value"].lower() or search_text in item["display"].lower() or search_text in item.get("gender", "").lower() or search_text in " ".join(item.get("content_categories", [])).lower() or search_text in " ".join(item.get("voice_personalities", [])).lower()]
+        if self.content_selected:
+            items = [item for item in items if any(tag in item.get("content_categories", []) for tag in self.content_selected)]
+        if self.personality_selected:
+            items = [item for item in items if any(tag in item.get("voice_personalities", []) for tag in self.personality_selected)]
+        return items
+
+    def tag_filter_changed(self, kind, selected):
+        if kind == "content":
+            self.content_selected = set(selected)
+        else:
+            self.personality_selected = set(selected)
+        self.render_items()
 
     def clear_grid(self):
         if self.scroll_frame is None:
@@ -135,8 +248,32 @@ class GridSelector:
             self.render_standard_grid(filtered_items)
         self.scroll_frame.update_idletasks()
 
+    def set_card_hover(self, card, active):
+        card.configure(border_width=2 if active else 1)
+
+    def bind_card_hover(self, card, *widgets):
+        for widget in (card, *widgets):
+            widget.bind("<Enter>", lambda event, target=card: self.set_card_hover(target, True))
+            widget.bind("<Leave>", lambda event, target=card: self.set_card_hover(target, False))
+
     def create_button(self, item):
-        return ctk.CTkButton(self.scroll_frame, text=item["display"], height=40, command=lambda value=item["value"]: self.select(value))
+        if not self.compact:
+            return ctk.CTkButton(self.scroll_frame, text=item["display"], height=40, command=lambda value=item["value"]: self.select(value))
+        card = ctk.CTkFrame(self.scroll_frame, height=94, corner_radius=10, border_width=1)
+        card.grid_propagate(False)
+        name_label = ctk.CTkLabel(card, text=item["display"], anchor="w", font=ctk.CTkFont(size=16, weight="bold"))
+        name_label.pack(fill="x", padx=13, pady=(10, 3))
+        categories = " · ".join(item.get("content_categories", []))
+        personalities = " · ".join(item.get("voice_personalities", []))
+        category_label = ctk.CTkLabel(card, text=categories or "No category", anchor="w", text_color="gray", font=ctk.CTkFont(size=12))
+        category_label.pack(fill="x", padx=13, pady=(0, 3))
+        personality_label = ctk.CTkLabel(card, text=personalities or "No personality", anchor="w", text_color="gray", font=ctk.CTkFont(size=12))
+        personality_label.pack(fill="x", padx=13, pady=(0, 8))
+        select_command = lambda event=None, value=item["value"]: self.select(value)
+        for widget in (card, name_label, category_label, personality_label):
+            widget.bind("<Button-1>", select_command)
+        self.bind_card_hover(card, name_label, category_label, personality_label)
+        return card
 
     def render_standard_grid(self, items):
         if not items:
@@ -350,23 +487,32 @@ class TTSApp(ctk.CTk):
         settings = ctk.CTkFrame(self)
         settings.grid(row=2, column=0, padx=30, pady=15, sticky="ew")
         settings.grid_columnconfigure(1, weight=1)
-        engine_label = ctk.CTkLabel(settings, text="Engine")
-        engine_label.grid(row=0, column=0, padx=15, pady=(15, 8), sticky="w")
-        self.engine_combo = ctk.CTkComboBox(settings, values=["Microsoft Edge Neural", "Windows SAPI"], height=38, command=self.engine_changed)
-        self.engine_combo.grid(row=0, column=1, padx=15, pady=(15, 8), sticky="ew")
-        self.engine_combo.set(DEFAULT_ENGINE)
-        language_label = ctk.CTkLabel(settings, text="Language")
-        language_label.grid(row=1, column=0, padx=15, pady=8, sticky="w")
-        self.language_selector = GridSelector(settings, width=500, height=38, columns=3, command=self.language_changed)
-        self.language_selector.grid(row=1, column=1, padx=15, pady=8, sticky="ew")
-        voice_label = ctk.CTkLabel(settings, text="Voice")
-        voice_label.grid(row=2, column=0, padx=15, pady=8, sticky="w")
-        self.voice_selector = GridSelector(settings, width=500, height=38, columns=3, gender_grouped=True)
-        self.voice_selector.grid(row=2, column=1, padx=15, pady=8, sticky="ew")
+        settings.grid_columnconfigure(3, weight=1)
+        engine_label = ctk.CTkLabel(settings, text="ENGINE")
+        engine_label.grid(row=0, column=0, padx=(18, 10), pady=(15, 8), sticky="w")
+        self.engine_combo = ctk.CTkOptionMenu(settings, values=["Microsoft Edge Neural", "Windows SAPI"], height=38, command=self.engine_changed)
+        self.engine_combo.grid(row=0, column=1, columnspan=3, padx=(0, 18), pady=(15, 8), sticky="ew")
+        language_label = ctk.CTkLabel(settings, text="LANGUAGE")
+        language_label.grid(row=1, column=0, padx=(18, 10), pady=8, sticky="w")
+        self.language_selector = GridSelector(settings, width=300, height=38, columns=3, command=self.language_changed)
+        self.language_selector.grid(row=1, column=1, padx=(0, 18), pady=8, sticky="ew")
+        country_label = ctk.CTkLabel(settings, text="COUNTRY")
+        country_label.grid(row=1, column=2, padx=(18, 10), pady=8, sticky="w")
+        self.country_selector = GridSelector(settings, width=300, height=38, columns=3, command=self.country_changed)
+        self.country_selector.grid(row=1, column=3, padx=(0, 18), pady=8, sticky="ew")
+        gender_label = ctk.CTkLabel(settings, text="GENDER")
+        gender_label.grid(row=2, column=0, padx=(18, 10), pady=8, sticky="w")
+        self.gender_combo = ctk.CTkOptionMenu(settings, values=["All"], height=38, command=self.gender_changed)
+        self.gender_combo.grid(row=2, column=1, padx=(0, 18), pady=8, sticky="ew")
+        self.gender_combo.set("All")
+        voice_label = ctk.CTkLabel(settings, text="VOICE")
+        voice_label.grid(row=2, column=2, padx=(18, 10), pady=8, sticky="w")
+        self.voice_selector = GridSelector(settings, width=300, height=38, columns=3, compact=True)
+        self.voice_selector.grid(row=2, column=3, padx=(0, 18), pady=8, sticky="ew")
         rate_label = ctk.CTkLabel(settings, text="Speed")
-        rate_label.grid(row=3, column=0, padx=15, pady=8, sticky="w")
+        rate_label.grid(row=3, column=0, padx=(18, 10), pady=8, sticky="w")
         rate_frame = ctk.CTkFrame(settings, fg_color="transparent", border_width=0)
-        rate_frame.grid(row=3, column=1, padx=15, pady=8, sticky="ew")
+        rate_frame.grid(row=3, column=1, columnspan=3, padx=(0, 18), pady=8, sticky="ew")
         rate_frame.grid_columnconfigure(0, weight=1)
         self.rate_slider = ctk.CTkSlider(rate_frame, from_=-50, to=100, number_of_steps=150, border_width=0, button_length=18, height=18, corner_radius=1000, command=self.update_rate)
         self.rate_slider.grid(row=0, column=0, sticky="ew")
@@ -374,9 +520,9 @@ class TTSApp(ctk.CTk):
         self.rate_value = ctk.CTkLabel(rate_frame, text="Normal", width=55)
         self.rate_value.grid(row=0, column=1, padx=(12, 0))
         pitch_label = ctk.CTkLabel(settings, text="Pitch")
-        pitch_label.grid(row=4, column=0, padx=15, pady=(8, 15), sticky="w")
+        pitch_label.grid(row=4, column=0, padx=(18, 10), pady=(8, 15), sticky="w")
         pitch_frame = ctk.CTkFrame(settings, fg_color="transparent", border_width=0)
-        pitch_frame.grid(row=4, column=1, padx=15, pady=(8, 15), sticky="ew")
+        pitch_frame.grid(row=4, column=1, columnspan=3, padx=(0, 18), pady=(8, 15), sticky="ew")
         pitch_frame.grid_columnconfigure(0, weight=1)
         self.pitch_slider = ctk.CTkSlider(pitch_frame, from_=-50, to=50, number_of_steps=100, border_width=0, button_length=18, height=18, corner_radius=1000, command=self.update_pitch)
         self.pitch_slider.grid(row=0, column=0, sticky="ew")
@@ -440,21 +586,30 @@ class TTSApp(ctk.CTk):
         return "Unknown"
 
     def apply_language_items(self, items):
-        self.language_selector.configure(items=items)
-        languages = [item["value"] for item in items]
-        selected = DEFAULT_LANGUAGE if DEFAULT_LANGUAGE in languages else (items[0]["value"] if items else "")
+        language_map = {}
+        default_language = ""
+        for item in items:
+            language = item["language"]
+            language_map.setdefault(language, []).append(item)
+            if item["value"] == DEFAULT_LANGUAGE:
+                default_language = language
+        self.locale_items = items
+        self.language_map = language_map
+        languages = list(language_map)
+        selected = default_language or (languages[0] if languages else "")
+        self.language_selector.configure(items=[{"value": language, "display": language, "gender": "Unknown"} for language in languages])
         self.language_selector.set(selected)
         self.language_changed(selected)
 
     def use_edge_engine(self):
         self.engine = "Microsoft Edge Neural"
-        self.apply_language_items(self.edge_tts.get_language_items())
+        self.apply_language_items(self.get_locale_items("Microsoft Edge Neural"))
         self.system_label.configure(text=f"Microsoft Edge Neural • {len(self.edge_tts.voices)} voices")
         self.status_label.configure(text="Microsoft Edge Neural ready")
 
     def use_sapi_engine(self, message="Windows SAPI ready"):
         self.engine = "Windows SAPI"
-        self.apply_language_items(self.sapi.get_language_items())
+        self.apply_language_items(self.get_locale_items("Windows SAPI"))
         self.system_label.configure(text=f"Windows SAPI • {len(self.sapi.voices)} voices")
         self.status_label.configure(text=message)
 
@@ -473,19 +628,76 @@ class TTSApp(ctk.CTk):
         else:
             self.use_sapi_engine()
 
-    def build_voice_items(self, language):
+    def get_locale_items(self, engine):
+        source = self.edge_tts.voices if engine == "Microsoft Edge Neural" else self.sapi.voices
+        items = []
+        seen = set()
+        for voice in source:
+            locale = voice["Locale"] if engine == "Microsoft Edge Neural" else voice["language"]
+            if locale in seen:
+                continue
+            seen.add(locale)
+            full_name = self.edge_tts.get_language_name(locale) if engine == "Microsoft Edge Neural" else self.sapi.get_language_name(locale)
+            language_name = full_name.split("(", 1)[0].strip()
+            country_name = full_name.split("(", 1)[1].rsplit(")", 1)[0].strip() if "(" in full_name and ")" in full_name else locale.split("-", 1)[1] if "-" in locale else locale
+            items.append({"value": locale, "display": language_name, "language": language_name, "country": country_name})
+        return sorted(items, key=lambda item: (item["language"].lower(), item["country"].lower()))
+
+    def build_voice_items(self, locale):
         if self.engine == "Microsoft Edge Neural":
-            return [{"value": v["ShortName"], "display": v["ShortName"], "gender": self.normalize_gender(v.get("Gender"))} for v in self.edge_tts.get_voices_for_language(language)]
-        return [{"value": v["name"], "display": v["name"], "gender": self.normalize_gender(v.get("gender"))} for v in self.sapi.get_voices_for_language(language)]
+            voices = self.edge_tts.get_voices_for_language(locale)
+            return [{"value": v["ShortName"], "display": v["ShortName"], "gender": self.normalize_gender(v.get("Gender")), "content_categories": v.get("VoiceTag", {}).get("ContentCategories", []) or [], "voice_personalities": v.get("VoiceTag", {}).get("VoicePersonalities", []) or []} for v in voices]
+        voices = self.sapi.get_voices_for_language(locale)
+        return [{"value": v["name"], "display": v["name"], "gender": self.normalize_gender(v.get("gender")), "content_categories": [], "voice_personalities": []} for v in voices]
 
     def language_changed(self, language):
-        if not language:
+        locales = self.language_map.get(language, [])
+        country_items = [{"value": item["value"], "display": item["country"], "gender": "Unknown"} for item in locales]
+        self.country_selector.configure(items=country_items)
+        if not locales:
+            self.selected_locale = ""
+            self.country_selector.set("")
             self.voice_selector.configure(items=[])
             self.voice_selector.set("")
+            self.update_gender_items([])
             return
-        items = self.build_voice_items(language)
+        selected = next((item["value"] for item in locales if item["value"] == getattr(self, "selected_locale", "")), locales[0]["value"])
+        if language == "English":
+            selected = next((item["value"] for item in locales if item["value"] == DEFAULT_LANGUAGE), selected)
+        self.selected_locale = selected
+        self.country_selector.set(selected)
+        self.refresh_voices()
+
+    def country_changed(self, locale):
+        if not locale:
+            return
+        item = next((item for item in self.locale_items if item["value"] == locale), None)
+        if item is None:
+            return
+        self.selected_locale = locale
+        self.language_selector.set(item["language"])
+        self.refresh_voices()
+
+    def gender_changed(self, gender):
+        self.refresh_voices()
+
+    def refresh_voices(self):
+        locale = getattr(self, "selected_locale", "")
+        all_items = self.build_voice_items(locale) if locale else []
+        self.update_gender_items(all_items)
+        selected_gender = self.gender_combo.get()
+        items = all_items if selected_gender == "All" else [item for item in all_items if item["gender"] == selected_gender]
         self.voice_selector.configure(items=items)
-        self.voice_selector.set(items[0]["value"] if items else "")
+        current_voice = self.voice_selector.get()
+        selected_voice = current_voice if any(item["value"] == current_voice for item in items) else (items[0]["value"] if items else "")
+        self.voice_selector.set(selected_voice)
+
+    def update_gender_items(self, items):
+        genders = sorted({item["gender"] for item in items if item["gender"] not in ("Unknown", "")})
+        values = ["All"] + genders
+        current = self.gender_combo.get()
+        self.gender_combo.configure(values=values)
+        self.gender_combo.set(current if current in values else "All")
 
     def get_text(self):
         text = self.textbox.get("1.0", "end").strip()
@@ -586,6 +798,7 @@ class TTSApp(ctk.CTk):
             return
         self.apply_button.configure(state="disabled")
         self.status_label.configure(text="Creating source WAV...")
+
         def worker():
             temp_mp3 = Path(tempfile.gettempdir()) / f"voicemdx_apply_{os.getpid()}_{int(time.time() * 1000)}.mp3"
             try:
@@ -607,6 +820,7 @@ class TTSApp(ctk.CTk):
                     pass
                 error_message = str(error)
                 self.after(0, lambda error_message=error_message: self.apply_on_source_error(error_message))
+
         threading.Thread(target=worker, daemon=True).start()
 
     def apply_on_source_finished(self):

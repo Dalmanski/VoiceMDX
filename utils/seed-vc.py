@@ -29,8 +29,8 @@ def patch_bigvgan():
 def prepare_source(app, source_path=None):
     app.seed_source_wav = app.inputs_dir / "seed_source.wav"
     input_source = source_path or app.uvr_vocal_path
-    app.extract_audio(input_source, app.seed_source_wav, "source vocal", 1)
-    app.seed_source_wav = app.normalize_audio(app.seed_source_wav, "seed_source")
+    app.ext_audio(input_source, app.seed_source_wav, "source vocal", 1)
+    app.seed_source_wav = app.norm_audio(app.seed_source_wav, "seed_source")
 
 def get_config(app):
     steps = DIFFUSION_STEP_OPTIONS.get(app.steps_choice_var.get(), 50)
@@ -62,5 +62,5 @@ def run(app):
     outputs = sorted(app.seed_output_dir.glob("*.wav"), key=lambda path: path.stat().st_mtime, reverse=True)
     if not outputs:
         raise RuntimeError("Seed-VC produced no WAV output.")
-    app.converted_vocal_path = outputs[0]
-    app.log(f"Converted vocal: {app._display_path(app.converted_vocal_path)}")
+    app.converted_path = outputs[0]
+    app.log(f"Converted vocal: {app._display_path(app.converted_path)}")
