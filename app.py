@@ -2,7 +2,6 @@ import modules.offline as offline
 import os
 import sys
 import gc
-import re
 import shutil
 import tempfile
 import threading
@@ -11,6 +10,7 @@ import time
 import atexit
 import importlib.metadata
 import importlib.util
+import wave
 from pathlib import Path
 from tkinter import filedialog
 import customtkinter as ctk
@@ -84,7 +84,10 @@ class App(ctk.CTk):
         self.mic_process = None
         self.mic_output_path = None
         self.process = self.preview_process = self.preview_kind = None
+        self.preview_path = None
+        self.preview_job = None
         self.preview_loop = False
+        self.loop_enabled = False
         self.generating = self.separating = self.target_loading = False
         self.ffmpeg = str(FFMPEG) if FFMPEG.exists() else None
         self.session_dir = TEMP_ROOT / f"session_{os.getpid()}_{int(time.time())}"
@@ -150,7 +153,7 @@ class App(ctk.CTk):
         self.generate_button.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="ew")
         self.bottom_prev = ctk.CTkButton(bottom, text="▶", command=self.toggle_out_prev, width=52, height=52, font=ctk.CTkFont(size=18), state="disabled")
         self.bottom_prev.grid(row=0, column=1, padx=4, pady=12)
-        self.bottom_loop = ctk.CTkButton(bottom, text="⟲", command=self.toggle_out_loop, width=52, height=52, font=ctk.CTkFont(size=18), state="disabled")
+        self.bottom_loop = ctk.CTkButton(bottom, text="⟲", command=self.toggle_out_loop, width=52, height=52, font=ctk.CTkFont(size=18))
         self.bottom_loop.grid(row=0, column=2, padx=4, pady=12)
         self.bottom_dl = ctk.CTkButton(bottom, text="⬇", command=self.dl_output, width=46, height=52, font=ctk.CTkFont(size=18), state="disabled")
         self.bottom_dl.grid(row=0, column=3, padx=4, pady=12)
@@ -355,7 +358,6 @@ class App(ctk.CTk):
             self.tts_process = subprocess.Popen(command, cwd=str(BASE_DIR))
             self.tts_output_path = output_path
             print("Opening TTS Editor...")
-            print("Status: TTS Editor opened")
             self.after(250, self.check_tts)
         except Exception as exc:
             self.tts_process = None
@@ -514,7 +516,6 @@ class App(ctk.CTk):
             self.after(0, lambda: self.conv_prev.configure(state="normal", text="▶"))
             self.after(0, lambda: self.conv_dl.configure(state="normal"))
             self.after(0, lambda: self.bottom_prev.configure(state="normal", text="▶"))
-            self.after(0, lambda: self.bottom_loop.configure(state="normal", text="⟲"))
             self.after(0, lambda: self.bottom_dl.configure(state="normal"))
             print("Status: Conversion complete")
             print(f"Final output: {self._display_path(self.output_path)}")
@@ -569,22 +570,25 @@ class App(ctk.CTk):
         self.toggle_prev("output")
 
     def toggle_out_loop(self):
-        self.toggle_prev("output", loop=True)
+        self.loop_enabled = not self.loop_enabled
+        self.bottom_loop.configure(text="⟳" if self.loop_enabled else "⟲")
+        print(f"Loop: {'ON' if self.loop_enabled else 'OFF'}")
 
     def toggle_conv_prev(self):
         self.toggle_prev("converted_vocal")
 
-    def toggle_prev(self, kind, loop=False):
-        if self.preview_kind == kind and self.preview_loop == loop:
+    def toggle_prev(self, kind):
+        if self.preview_kind == kind:
             self.stop_prev()
             return
         if kind == "source":
-            self.play_prev(self.src_prev_wav or self.prep_prev(self.source_path, "source"), kind, loop=loop)
+            source = self.src_prev_wav or self.prep_prev(self.source_path, "source")
+            self.play_prev(source, kind)
             return
         if kind == "target":
             if self.target_vocal_path and self.target_vocal_path.exists():
                 self.tgt_prev_wav = self.target_vocal_path
-                self.play_prev(self.tgt_prev_wav, kind, loop=loop)
+                self.play_prev(self.tgt_prev_wav, kind)
                 return
             if not self.target_path or not self.target_path.exists():
                 print("Preview unavailable: target")
@@ -596,8 +600,8 @@ class App(ctk.CTk):
             print("Status: Cleaning target for preview...")
             threading.Thread(target=self.prep_tgt_prev, daemon=True).start()
             return
-        paths = {"instrumental": self.inst_path, "vocal": self.uvr_vocal_path, "converted_vocal": self.converted_path}
-        self.play_prev(paths.get(kind, self.output_path), kind, loop=loop)
+        paths = {"instrumental": self.inst_path, "vocal": self.uvr_vocal_path, "converted_vocal": self.converted_path, "output": self.output_path}
+        self.play_prev(paths.get(kind), kind)
 
     def prep_tgt_prev(self):
         try:
@@ -612,37 +616,82 @@ class App(ctk.CTk):
         finally:
             self.target_loading = False
 
-    def play_prev(self, path, kind, loop=False):
+    def play_prev(self, path, kind):
         if not path or not Path(path).exists():
             print(f"Preview unavailable: {kind}")
             return
         self.stop_prev()
+        path = Path(path)
         try:
             if sys.platform.startswith("win"):
                 import winsound
-                flags = winsound.SND_FILENAME | winsound.SND_ASYNC
-                if loop:
-                    flags |= winsound.SND_LOOP
-                winsound.PlaySound(str(path), flags)
+                winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
                 self.preview_process = "winsound"
             else:
                 ffplay = shutil.which("ffplay")
                 if not ffplay:
                     raise RuntimeError("ffplay was not found.")
-                command = [ffplay, "-nodisp", "-autoexit"]
-                if loop:
-                    command += ["-loop", "0"]
-                command.append(str(path))
+                command = [ffplay, "-nodisp", "-autoexit", str(path)]
                 self.preview_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.preview_path = path
             self.preview_kind = kind
-            self.preview_loop = loop
+            self.preview_loop = self.loop_enabled
             self.set_prev_icons(kind)
-            print(f"Playing {kind} preview{' in loop' if loop else ''}: {self._display_path(path)}")
+            self.schedule_preview_end(path)
+            print(f"Playing {kind} preview{' in loop' if self.loop_enabled else ''}: {self._display_path(path)}")
         except Exception as exc:
             self.preview_process = self.preview_kind = None
+            self.preview_path = None
             self.preview_loop = False
+            self.cancel_preview_job()
             self.set_prev_icons()
             print(f"Preview error: {type(exc).__name__}: {exc}")
+
+    def schedule_preview_end(self, path):
+        self.cancel_preview_job()
+        if not path or not Path(path).exists():
+            return
+        if not sys.platform.startswith("win"):
+            self.preview_job = self.after(100, self.check_preview_process)
+            return
+        try:
+            with wave.open(str(path), "rb") as audio:
+                rate = audio.getframerate()
+                frames = audio.getnframes()
+            if rate <= 0 or frames <= 0:
+                return
+            duration_ms = max(100, int((frames / rate) * 1000) + 50)
+            self.preview_job = self.after(duration_ms, lambda p=Path(path): self.preview_finished(p))
+        except Exception:
+            pass
+
+    def check_preview_process(self):
+        if not isinstance(self.preview_process, subprocess.Popen):
+            return
+        if self.preview_process.poll() is None:
+            self.preview_job = self.after(100, self.check_preview_process)
+            return
+        path = self.preview_path
+        if path and self.preview_kind:
+            self.preview_finished(path)
+
+    def preview_finished(self, path):
+        self.preview_job = None
+        if self.preview_path != Path(path) or not self.preview_kind:
+            return
+        kind = self.preview_kind
+        if self.loop_enabled:
+            self.play_prev(path, kind)
+            return
+        self.stop_prev()
+
+    def cancel_preview_job(self):
+        if self.preview_job is not None:
+            try:
+                self.after_cancel(self.preview_job)
+            except Exception:
+                pass
+            self.preview_job = None
 
     def prep_prev(self, source_path, kind):
         if not source_path or not Path(source_path).exists() or not self.ffmpeg:
@@ -661,9 +710,10 @@ class App(ctk.CTk):
         for kind, button in buttons:
             button.configure(text="■" if kind == active else "▶")
         if hasattr(self, "bottom_loop"):
-            self.bottom_loop.configure(text="■" if self.preview_kind == "output" and self.preview_loop else "⟲")
+            self.bottom_loop.configure(text="⟳" if self.loop_enabled else "⟲")
 
     def stop_prev(self):
+        self.cancel_preview_job()
         try:
             if sys.platform.startswith("win"):
                 import winsound
@@ -676,6 +726,7 @@ class App(ctk.CTk):
             except Exception:
                 pass
         self.preview_process = self.preview_kind = None
+        self.preview_path = None
         self.preview_loop = False
         if hasattr(self, "source_card"):
             self.set_prev_icons()
@@ -731,8 +782,8 @@ class App(ctk.CTk):
         self.inst_dl.configure(state="disabled")
         self.vocal_dl.configure(state="disabled")
         self.bottom_prev.configure(state="disabled", text="▶")
-        self.bottom_loop.configure(state="disabled", text="⟲")
         self.bottom_dl.configure(state="disabled")
+        self.bottom_loop.configure(state="normal", text="⟳" if self.loop_enabled else "⟲")
 
     def clear_prev_proc(self):
         self.clear_prev_out()
@@ -829,7 +880,6 @@ class App(ctk.CTk):
             raw = str(path)
             if not raw:
                 return raw
-
             candidate = os.path.normpath(raw)
             if sys.platform.startswith("win"):
                 try:
@@ -839,7 +889,6 @@ class App(ctk.CTk):
                         candidate = long_path.value
                 except Exception:
                     pass
-
             candidate = os.path.abspath(candidate)
             temp_root = os.path.normpath(str(TEMP_ROOT))
             user_profile = os.path.normpath(os.environ.get("USERPROFILE", str(Path.home())))
