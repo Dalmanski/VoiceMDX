@@ -2,7 +2,10 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+
+from utils.vid2wav import convert_media_to_wav
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SEED_VC_ROOT = BASE_DIR / "seed-vc"
@@ -11,6 +14,16 @@ BIGVGAN_FILE = SEED_VC_ROOT / "modules" / "bigvgan" / "bigvgan.py"
 DIFFUSION_STEP_OPTIONS = {"Low": 25, "Recommended": 50, "High": 75, "Extreme": 100}
 MIN_SEMITONE = -72
 MAX_SEMITONE = 72
+
+
+@dataclass(frozen=True)
+class SeedVCSettings:
+    steps: int = 50
+    cfg: float = 0.80
+    f0: bool = False
+    auto_f0: bool = True
+    pitch: int = 0
+
 
 def patch_bigvgan():
     if not BIGVGAN_FILE.exists():
@@ -26,41 +39,41 @@ def patch_bigvgan():
     except Exception as exc:
         return f"BigVGAN patch error: {type(exc).__name__}: {exc}"
 
-def prepare_source(app, source_path=None):
-    app.seed_source_wav = app.inputs_dir / "seed_source.wav"
-    input_source = source_path or app.uvr_vocal_path
-    app.ext_audio(input_source, app.seed_source_wav, "source vocal", 1)
-    app.seed_source_wav = app.norm_audio(app.seed_source_wav, "seed_source")
+def prepare_source(source_path, inputs_dir, ffmpeg_path, log=print):
+    seed_source_wav = Path(inputs_dir) / "seed_source.wav"
+    convert_media_to_wav(source_path, seed_source_wav, ffmpeg_path=ffmpeg_path, channels=1, sample_rate=44100, label="source vocal")
+    log(f"Source vocal audio ready: {seed_source_wav}")
+    return seed_source_wav
 
-def get_config(app):
-    steps = DIFFUSION_STEP_OPTIONS.get(app.steps_choice_var.get(), 50)
-    target_pitch = app.follow_pitch_var.get() == "Target Voice Pitch"
-    vocalize = app.mode_var.get() == "Vocalize"
+def get_config(steps_choice="Recommended", follow_pitch="Target Voice Pitch", mode="Vocalize", semitone=0):
+    steps = DIFFUSION_STEP_OPTIONS.get(steps_choice, 50)
+    target_pitch = follow_pitch == "Target Voice Pitch"
+    vocalize = mode == "Vocalize"
     auto_f0 = target_pitch
-    pitch = max(MIN_SEMITONE, min(MAX_SEMITONE, int(app.semitone_var.get())))
-    return {"steps": steps, "cfg": 0.80, "f0": vocalize, "auto_f0": auto_f0, "pitch": pitch}
+    pitch = max(MIN_SEMITONE, min(MAX_SEMITONE, int(semitone)))
+    return SeedVCSettings(steps=steps, f0=vocalize, auto_f0=auto_f0, pitch=pitch)
 
-def command(app):
-    cfg = get_config(app)
-    return [sys.executable, str(INFERENCE_SCRIPT), "--source", str(app.seed_source_wav), "--target", str(app.target_wav), "--output", str(app.seed_output_dir), "--diffusion-steps", str(cfg["steps"]), "--length-adjust", "1.0", "--inference-cfg-rate", str(cfg["cfg"]), "--f0-condition", str(cfg["f0"]), "--auto-f0-adjust", str(cfg["auto_f0"]), "--semi-tone-shift", str(cfg["pitch"]), "--fp16", "True"]
+def command(source_wav, target_wav, output_dir, cfg):
+    return [sys.executable, str(INFERENCE_SCRIPT), "--source", str(source_wav), "--target", str(target_wav), "--output", str(output_dir), "--diffusion-steps", str(cfg.steps), "--length-adjust", "1.0", "--inference-cfg-rate", str(cfg.cfg), "--f0-condition", str(cfg.f0), "--auto-f0-adjust", str(cfg.auto_f0), "--semi-tone-shift", str(cfg.pitch), "--fp16", "True"]
 
-def run(app):
-    for item in app.seed_output_dir.glob("*.wav"):
+def run(source_wav, target_wav, output_dir, cfg, log=print):
+    output_dir = Path(output_dir)
+    for item in output_dir.glob("*.wav"):
         try:
             item.unlink()
         except Exception:
             pass
-    app.process = subprocess.Popen(command(app), cwd=str(SEED_VC_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1, env=os.environ.copy())
-    for line in iter(app.process.stdout.readline, ""):
+    process = subprocess.Popen(command(source_wav, target_wav, output_dir, cfg), cwd=str(SEED_VC_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1, env=os.environ.copy())
+    for line in iter(process.stdout.readline, ""):
         if line:
-            app.log(line.rstrip())
-    app.process.stdout.close()
-    code = app.process.wait()
-    app.process = None
+            log(line.rstrip())
+    process.stdout.close()
+    code = process.wait()
     if code != 0:
         raise RuntimeError(f"Seed-VC exited with code {code}.")
-    outputs = sorted(app.seed_output_dir.glob("*.wav"), key=lambda path: path.stat().st_mtime, reverse=True)
+    outputs = sorted(output_dir.glob("*.wav"), key=lambda path: path.stat().st_mtime, reverse=True)
     if not outputs:
         raise RuntimeError("Seed-VC produced no WAV output.")
-    app.converted_path = outputs[0]
-    app.log(f"Converted vocal: {app._display_path(app.converted_path)}")
+    converted_path = outputs[0]
+    log(f"Converted vocal: {converted_path}")
+    return converted_path

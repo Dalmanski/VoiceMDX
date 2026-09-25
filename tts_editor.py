@@ -12,8 +12,8 @@ import sys
 import pygame
 from pathlib import Path
 from tkinter import filedialog
-from utils.centwin import center_window
-from utils.ctk_theme import configure_ctk_theme
+from widgets.centwin import center_window
+from widgets.ctk_theme import configure_ctk_theme
 configure_ctk_theme()
 
 DEFAULT_LANGUAGE = "en-US"

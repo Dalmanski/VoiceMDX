@@ -16,10 +16,10 @@ from tkinter import filedialog
 import customtkinter as ctk
 import torch
 from widgets.console_textbox import ConsoleRedirect, ConsoleTextBox
-from utils.ctk_theme import configure_ctk_theme
+from widgets.ctk_theme import configure_ctk_theme
+from utils.ideal_voice import prepare_seed_vc_target
 from utils.vid2wav import convert_media_to_wav
-
-configure_ctk_theme()
+from utils.config_manager import ConfigManager
 
 uvr_spec = importlib.util.spec_from_file_location("uvr_mdx", Path(__file__).resolve().parent / "utils" / "uvr-mdx.py")
 uvr_mdx = importlib.util.module_from_spec(uvr_spec)
@@ -29,6 +29,8 @@ seed_vc = importlib.util.module_from_spec(seed_spec)
 seed_spec.loader.exec_module(seed_vc)
 
 BASE_DIR = Path(__file__).resolve().parent
+ConfigManager.load_env(BASE_DIR)
+configure_ctk_theme()
 FFMPEG = BASE_DIR / "ffmpeg.exe"
 TEMP_ROOT = Path(tempfile.gettempdir()) / "voicemdx_temp"
 AUDIO_EXTENSIONS = [".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".caf"]
@@ -307,8 +309,8 @@ class App(ctk.CTk):
         target_pitch = self.follow_pitch_var.get() == "Target Voice Pitch"
         descriptions = {(True, True): "same voice with minimal pitch change", (True, False): "same voice with source pitch", (False, True): "exact voice with minimal source pitch", (False, False): "exact voice without source pitch"}
         description = descriptions[(vocalize, target_pitch)]
-        cfg = seed_vc.get_config(self)
-        self.config_info.configure(text=f"steps={cfg['steps']} · f0={cfg['f0']} · auto_f0={cfg['auto_f0']}    {description}")
+        cfg = seed_vc.get_config(self.steps_choice_var.get(), self.follow_pitch_var.get(), self.mode_var.get(), self.semitone_var.get())
+        self.config_info.configure(text=f"steps={cfg.steps} · f0={cfg.f0} · auto_f0={cfg.auto_f0}    {description}")
 
     def pick_file(self, title):
         patterns = " ".join(f"*{ext}" for ext in ALL_EXTENSIONS)
@@ -434,7 +436,22 @@ class App(ctk.CTk):
         self.target_path = Path(path)
         self.target_card["name"].configure(text=self.target_path.name, text_color="green")
         print(f"Target selected: {self._display_path(self.target_path)}")
-        print("Status: Target selected")
+        self.target_loading = True
+        self.target_card["preview"].configure(state="disabled", text="…")
+        print("Status: Preparing target voice...")
+        threading.Thread(target=self.prepare_target_worker, daemon=True).start()
+
+    def prepare_target_worker(self):
+        try:
+            self.prepare_target_vocal()
+            print("Status: Target voice ready")
+        except Exception as exc:
+            self.target_vocal_path = self.target_wav = self.target_preview_wav = None
+            print(f"TARGET ERROR: {type(exc).__name__}: {exc}")
+            print("Status: Target preparation failed")
+        finally:
+            self.target_loading = False
+            self.after(0, lambda: self.target_card["preview"].configure(state="normal", text="▶"))
 
     def sep_thread(self):
         if self.generating or self.separating:
@@ -449,7 +466,7 @@ class App(ctk.CTk):
         self.separating = True
         print("Status: Automatically separating source vocal and Inst / BG...")
         try:
-            uvr_mdx.ensure_source_stems(self)
+            self.ensure_source_stems()
             print("Status: UVR separation complete")
         except Exception as exc:
             print(f"UVR ERROR: {type(exc).__name__}: {exc}")
@@ -457,16 +474,28 @@ class App(ctk.CTk):
         finally:
             self.separating = False
 
-    def norm_audio(self, input_path, name):
-        if not self.ffmpeg:
-            raise RuntimeError(f"FFmpeg was not found: {FFMPEG}")
-        output = self.normalized_dir / f"{Path(input_path).stem}_{name}.wav"
-        command = [self.ffmpeg, "-y", "-i", str(input_path), "-af", "loudnorm=I=-16:LRA=11:TP=-1", "-ar", "44100", "-c:a", "pcm_s16le", str(output)]
-        print(f"Normalizing: {Path(input_path).name}")
-        completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-        if completed.returncode != 0 or not output.exists():
-            raise RuntimeError(f"Loudness normalization failed for {input_path}.")
-        return output
+    def ensure_source_stems(self):
+        if self.inst_path and self.inst_path.exists() and self.uvr_vocal_path and self.uvr_vocal_path.exists():
+            return
+        stems = uvr_mdx.ensure_source_stems(self.source_path, self.ffmpeg, self.inputs_dir, self.vocal_dir, self.inst_dir, log=self.log, cleanup_gpu=self.cleanup_gpu)
+        self.uvr_vocal_path = stems.vocal_path
+        self.inst_path = stems.instrumental_path
+        self.has_background = stems.has_background
+        if self.inst_path:
+            self.inst_name.configure(text=self.inst_path.name, text_color="green")
+            self.inst_prev.configure(state="normal")
+            self.inst_dl.configure(state="normal")
+        else:
+            self.inst_name.configure(text="Vocal only on source", text_color="yellow")
+        self.vocal_name.configure(text=self.uvr_vocal_path.name, text_color="green")
+        self.vocal_prev.configure(state="normal")
+        self.vocal_dl.configure(state="normal")
+
+    def prepare_target_vocal(self):
+        result = prepare_seed_vc_target(self.target_path, log=self.log)
+        self.target_vocal_path = Path(result["prepared_path"])
+        self.target_wav = self.target_preview_wav = self.target_vocal_path
+        return self.target_vocal_path
 
     def ext_audio(self, input_path, output_path, label, channels=1):
         if not self.ffmpeg:
@@ -492,21 +521,19 @@ class App(ctk.CTk):
         try:
             self.stop_prev()
             print("Status: Preparing separated source vocal and Inst / BG...")
-            uvr_mdx.ensure_source_stems(self)
+            self.ensure_source_stems()
             seed_input = self.uvr_vocal_path
             print("Status: Cleaning target voice...")
-            self.target_wav = self.target_vocal_path = uvr_mdx.run_target_uvr(self)
-            seed_vc.prepare_source(self, seed_input)
-            cfg = seed_vc.get_config(self)
-            print(f"Seed-VC steps: {cfg['steps']}")
-            print(f"Seed-VC strength: {cfg['cfg']:.2f}")
-            print(f"Seed-VC F0: {cfg['f0']}")
+            self.prepare_target_vocal()
+            self.seed_source_wav = seed_vc.prepare_source(seed_input, self.inputs_dir, self.ffmpeg, log=print)
+            cfg = seed_vc.get_config(self.steps_choice_var.get(), self.follow_pitch_var.get(), self.mode_var.get(), self.semitone_var.get())
+            print(f"Seed-VC steps: {cfg.steps}")
+            print(f"Seed-VC strength: {cfg.cfg:.2f}")
+            print(f"Seed-VC F0: {cfg.f0}")
             print(f"Seed-VC Follow Pitch Voice: {self.follow_pitch_var.get()}")
-            print(f"Seed-VC Semitone Shift: {cfg['pitch']:+d}")
+            print(f"Seed-VC Semitone Shift: {cfg.pitch:+d}")
             print("Status: Running Seed-VC...")
-            seed_vc.run(self)
-            self.converted_path = self.norm_audio(self.converted_path, "converted_vocal")
-            self.soften_conv()
+            self.converted_path = seed_vc.run(self.seed_source_wav, self.target_wav, self.seed_output_dir, cfg, log=self.log)
             print("Status: Mixing final output...")
             self.mix_final()
             self.after(0, lambda: self.output_name.configure(text=self.output_path.name, text_color="green"))
@@ -527,26 +554,13 @@ class App(ctk.CTk):
             self.generating = False
             self.after(0, lambda: self.generate_button.configure(state="normal", text="Generate Converted Vocal + Mix"))
 
-    def soften_conv(self):
-        if not self.ffmpeg or not self.converted_path or not Path(self.converted_path).exists():
-            raise RuntimeError("Converted vocal was not found for softening.")
-        output = self.normalized_dir / "converted_vocal_softened.wav"
-        filter_chain = "highpass=f=70,lowpass=f=14500,equalizer=f=6200:t=q:w=1.0:g=-3.0,equalizer=f=9000:t=q:w=1.2:g=-2.0,acompressor=threshold=-18dB:ratio=2:attack=8:release=100,alimiter=limit=-2dB"
-        command = [self.ffmpeg, "-y", "-i", str(self.converted_path), "-af", filter_chain, "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", str(output)]
-        completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-        if completed.returncode != 0 or not output.exists():
-            self.log_process_output(completed.stdout)
-            raise RuntimeError("Converted vocal softening failed.")
-        self.converted_path = output
-        print(f"Softened converted vocal: {self._display_path(self.converted_path)}")
-
     def mix_final(self):
         self.output_path = self.output_dir / "final_mix.wav"
         if not self.has_background:
             shutil.copy2(self.converted_path, self.output_path)
             print(f"Final vocal created: {self._display_path(self.output_path)}")
             return
-        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", "[1:a]aresample=44100,volume=5dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=1[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
+        filter_complex = chr(59).join(["[0:a]aresample=44100,volume=3dB[a0]", "[1:a]aresample=44100[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.inst_path), "-i", str(self.converted_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0 or not self.output_path.exists():
@@ -605,7 +619,7 @@ class App(ctk.CTk):
 
     def prep_tgt_prev(self):
         try:
-            target = uvr_mdx.run_target_uvr(self)
+            target = self.prepare_target_vocal()
             self.after(0, lambda: self.target_card["preview"].configure(state="normal", text="▶"))
             print("Status: Target vocal ready")
             self.after(0, lambda p=target: self.play_prev(p, "target"))
@@ -861,7 +875,19 @@ class App(ctk.CTk):
         except Exception:
             pass
         try:
-            shutil.rmtree(self.session_dir, ignore_errors=True)
+            session_dir = Path(getattr(self, "session_dir", TEMP_ROOT))
+            if session_dir.exists():
+                shutil.rmtree(session_dir, ignore_errors=True)
+            cleanup_old_sessions(None)
+            if TEMP_ROOT.exists():
+                for child in list(TEMP_ROOT.iterdir()):
+                    if child.is_dir() and child.name.startswith("session_"):
+                        shutil.rmtree(child, ignore_errors=True)
+                try:
+                    if not any(TEMP_ROOT.iterdir()):
+                        TEMP_ROOT.rmdir()
+                except Exception:
+                    pass
         except Exception:
             pass
 
