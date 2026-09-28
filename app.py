@@ -18,6 +18,7 @@ import customtkinter as ctk
 import torch
 from widgets.console_textbox import ConsoleRedirect, ConsoleTextBox
 from widgets.ctk_theme import configure_ctk_theme
+from widgets.spectrum import SpectrumWidget
 from utils.ideal_voice import prepare_seed_vc_target
 from utils.vid2wav import convert_media_to_wav
 from utils.config_manager import ConfigManager
@@ -125,6 +126,7 @@ class App(ctk.CTk):
         self.card_width = max(480, (self.winfo_screenwidth() - self.safe_padding * 2 - CARD_GAP) // 2)
         safe_zone = ctk.CTkFrame(self, corner_radius=0, border_width=0, fg_color="transparent")
         safe_zone.grid(row=0, column=0, sticky="nsew", padx=self.safe_padding, pady=(24, 10))
+        self.safe_zone = safe_zone
         safe_zone.grid_rowconfigure(0, weight=1)
         safe_zone.grid_columnconfigure(0, weight=1)
         cards = ctk.CTkScrollableFrame(safe_zone, corner_radius=0, border_width=0, fg_color="transparent")
@@ -152,6 +154,7 @@ class App(ctk.CTk):
         bottom.grid(row=1, column=0, sticky="ew", padx=self.safe_padding, pady=(0, 14))
         bottom.grid_propagate(False)
         bottom.grid_columnconfigure(0, weight=1)
+        self.spectrum = SpectrumWidget(self, bottom, height=72)
         self.generate_button = ctk.CTkButton(bottom, text="Generate Converted Vocal + Mix", command=self.gen_thread, height=52, font=ctk.CTkFont(size=16, weight="bold"))
         self.generate_button.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="ew")
         self.bottom_prev = ctk.CTkButton(bottom, text="▶", command=self.toggle_out_prev, width=52, height=52, font=ctk.CTkFont(size=18), state="disabled")
@@ -655,6 +658,8 @@ class App(ctk.CTk):
             self.preview_path = path
             self.preview_kind = kind
             self.preview_loop = self.loop_enabled
+            self.spectrum.play(path)
+            self.safe_zone.grid_configure(pady=(24, self.spectrum.visual_height + 10))
             self.set_prev_icons(kind)
             self.schedule_preview_end(path)
             print(f"Playing {kind} preview{' in loop' if self.loop_enabled else ''}: {self._display_path(path)}")
@@ -747,6 +752,9 @@ class App(ctk.CTk):
         self.preview_process = self.preview_kind = None
         self.preview_path = None
         self.preview_loop = False
+        if hasattr(self, "spectrum"):
+            self.spectrum.stop()
+            self.safe_zone.grid_configure(pady=(24, 10))
         if hasattr(self, "source_card"):
             self.set_prev_icons()
 
