@@ -13,6 +13,7 @@ import importlib.util
 import wave
 from pathlib import Path
 from tkinter import filedialog
+
 import customtkinter as ctk
 import torch
 from widgets.console_textbox import ConsoleRedirect, ConsoleTextBox
@@ -533,7 +534,10 @@ class App(ctk.CTk):
             print(f"Seed-VC Follow Pitch Voice: {self.follow_pitch_var.get()}")
             print(f"Seed-VC Semitone Shift: {cfg.pitch:+d}")
             print("Status: Running Seed-VC...")
-            self.converted_path = seed_vc.run(self.seed_source_wav, self.target_wav, self.seed_output_dir, cfg, log=self.log)
+            target_name = self.target_path.stem
+            converted_name = f"{self.source_path.stem}-voc_{target_name}.wav"
+            self.converted_path = seed_vc.run(self.seed_source_wav, self.target_wav, self.seed_output_dir, cfg, log=self.log, output_name=converted_name)
+            self.converted_path = seed_vc.match_audio_volume(self.uvr_vocal_path, self.converted_path, log=self.log)
             print("Status: Mixing final output...")
             self.mix_final()
             self.after(0, lambda: self.output_name.configure(text=self.output_path.name, text_color="green"))
@@ -555,12 +559,13 @@ class App(ctk.CTk):
             self.after(0, lambda: self.generate_button.configure(state="normal", text="Generate Converted Vocal + Mix"))
 
     def mix_final(self):
-        self.output_path = self.output_dir / "final_mix.wav"
+        self.output_path = self.output_dir / f"{self.source_path.stem} {self.target_path.stem} Cover.wav"
         if not self.has_background:
             shutil.copy2(self.converted_path, self.output_path)
             print(f"Final vocal created: {self._display_path(self.output_path)}")
             return
-        filter_complex = chr(59).join(["[0:a]aresample=44100,volume=3dB[a0]", "[1:a]aresample=44100[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]", "[mix]loudnorm=I=-16:LRA=11:TP=-1.5[out]"])
+        vocal_gain_db = seed_vc.get_mix_vocal_gain_db(self.inst_path, self.converted_path, target_offset_db=1.0, log=self.log)
+        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume={vocal_gain_db:.2f}dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]", "[mix]alimiter=limit=0.95:level=false[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.inst_path), "-i", str(self.converted_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0 or not self.output_path.exists():
@@ -812,26 +817,26 @@ class App(ctk.CTk):
         self.vocal_dl.configure(state="disabled")
         self.upd_config()
 
-    def dl_audio(self, source_path, title, initialfile):
+    def dl_audio(self, source_path, title):
         if not source_path or not Path(source_path).exists():
             return
-        path = filedialog.asksaveasfilename(title=title, defaultextension=".wav", filetypes=[("WAV Files", "*.wav")], initialfile=initialfile)
+        path = filedialog.asksaveasfilename(title=title, defaultextension=".wav", filetypes=[("WAV Files", "*.wav")], initialfile=Path(source_path).name)
         if path:
             shutil.copy2(source_path, path)
             print(f"Saved: {self._display_path(path)}")
             print("Status: WAV saved")
 
     def dl_inst(self):
-        self.dl_audio(self.inst_path, "Save instrumental WAV", "instrumental_saved.wav")
+        self.dl_audio(self.inst_path, "Save instrumental WAV")
 
     def dl_vocal(self):
-        self.dl_audio(self.uvr_vocal_path, "Save vocal WAV", "vocal_saved.wav")
+        self.dl_audio(self.uvr_vocal_path, "Save vocal WAV")
 
     def dl_output(self):
-        self.dl_audio(self.output_path, "Save final mix WAV", "final_mix_saved.wav")
+        self.dl_audio(self.output_path, "Save final mix WAV")
 
     def dl_conv(self):
-        self.dl_audio(self.converted_path, "Save converted vocal WAV", "converted_vocal_saved.wav")
+        self.dl_audio(self.converted_path, "Save converted vocal WAV")
 
     def clear_console(self):
         if self.generating or self.separating or self.target_loading:

@@ -5,6 +5,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+import soundfile as sf
+
 from utils.vid2wav import convert_media_to_wav
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -39,6 +42,55 @@ def patch_bigvgan():
     except Exception as exc:
         return f"BigVGAN patch error: {type(exc).__name__}: {exc}"
 
+def match_audio_volume(reference_path, target_path, log=print):
+    if not reference_path or not target_path:
+        return target_path
+    reference_path = Path(reference_path)
+    target_path = Path(target_path)
+    if not reference_path.exists() or not target_path.exists():
+        return target_path
+    reference, reference_rate = sf.read(reference_path, dtype="float32", always_2d=True)
+    target, target_rate = sf.read(target_path, dtype="float32", always_2d=True)
+    if reference_rate != target_rate or reference.size == 0 or target.size == 0:
+        return target_path
+    length = min(len(reference), len(target))
+    reference_mono = reference[:length].mean(axis=1)
+    target_mono = target[:length].mean(axis=1)
+    reference_rms = float(np.sqrt(np.mean(reference_mono ** 2)))
+    target_rms = float(np.sqrt(np.mean(target_mono ** 2)))
+    if reference_rms <= 0 or target_rms <= 0:
+        return target_path
+    gain_db = 20 * np.log10(reference_rms / target_rms)
+    gain = 10 ** (gain_db / 20.0)
+    adjusted = 0.98 * np.tanh(target * gain / 0.98)
+    sf.write(target_path, adjusted, target_rate, subtype="PCM_16")
+    log(f"Matched converted voice volume to separated vocal: {gain_db:+.2f} dB")
+    return target_path
+
+def get_mix_vocal_gain_db(instrumental_path, converted_path, target_offset_db=0.0, log=print):
+    if not instrumental_path or not converted_path:
+        return 0.0
+    instrumental_path = Path(instrumental_path)
+    converted_path = Path(converted_path)
+    if not instrumental_path.exists() or not converted_path.exists():
+        return 0.0
+    instrumental, _ = sf.read(instrumental_path, dtype="float32", always_2d=True)
+    converted, _ = sf.read(converted_path, dtype="float32", always_2d=True)
+    if instrumental.size == 0 or converted.size == 0:
+        return 0.0
+    instrumental_rms = float(np.sqrt(np.mean(instrumental.astype(np.float64) ** 2)))
+    converted_rms = float(np.sqrt(np.mean(converted.astype(np.float64) ** 2)))
+    if not np.isfinite(instrumental_rms) or not np.isfinite(converted_rms) or instrumental_rms <= 0 or converted_rms <= 0:
+        log("Mix balance unchanged: instrumental or converted voice is silent.")
+        return 0.0
+    instrumental_db = 20 * np.log10(instrumental_rms)
+    converted_db = 20 * np.log10(converted_rms)
+    target_vocal_db = instrumental_db + target_offset_db
+    gain_db = target_vocal_db - converted_db
+    log(f"Mix balance: instrumental {instrumental_db:+.2f} dBFS, converted voice {converted_db:+.2f} dBFS; applying {gain_db:+.2f} dB to target {target_vocal_db:+.2f} dBFS.")
+    return float(gain_db)
+
+
 def prepare_source(source_path, inputs_dir, ffmpeg_path, log=print):
     seed_source_wav = Path(inputs_dir) / "seed_source.wav"
     convert_media_to_wav(source_path, seed_source_wav, ffmpeg_path=ffmpeg_path, channels=1, sample_rate=44100, label="source vocal")
@@ -56,7 +108,7 @@ def get_config(steps_choice="Recommended", follow_pitch="Target Voice Pitch", mo
 def command(source_wav, target_wav, output_dir, cfg):
     return [sys.executable, str(INFERENCE_SCRIPT), "--source", str(source_wav), "--target", str(target_wav), "--output", str(output_dir), "--diffusion-steps", str(cfg.steps), "--length-adjust", "1.0", "--inference-cfg-rate", str(cfg.cfg), "--f0-condition", str(cfg.f0), "--auto-f0-adjust", str(cfg.auto_f0), "--semi-tone-shift", str(cfg.pitch), "--fp16", "True"]
 
-def run(source_wav, target_wav, output_dir, cfg, log=print):
+def run(source_wav, target_wav, output_dir, cfg, log=print, output_name=None):
     output_dir = Path(output_dir)
     for item in output_dir.glob("*.wav"):
         try:
@@ -75,5 +127,7 @@ def run(source_wav, target_wav, output_dir, cfg, log=print):
     if not outputs:
         raise RuntimeError("Seed-VC produced no WAV output.")
     converted_path = outputs[0]
+    if output_name:
+        converted_path = converted_path.rename(output_dir / output_name)
     log(f"Converted vocal: {converted_path}")
     return converted_path

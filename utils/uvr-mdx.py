@@ -183,6 +183,10 @@ def ensure_source_stems(source_path, ffmpeg_path, inputs_dir, vocal_dir, inst_di
         instrumental_path = separate(source_wav, UVR_INSTRUMENT_MODEL, inst_dir, "Instrumental", "UVR batch 2 memory error; retrying with batch 1...", f"{UVR_INSTRUMENT_MODEL.name} did not produce Instrumental.wav", log, cleanup_gpu)
         cleanup_gpu()
         instrumental_path = match_instrumental_volume(source_wav, vocal_path, instrumental_path)
+    source_name = Path(source_path).stem
+    vocal_path = vocal_path.rename(vocal_path.with_name(f"{source_name}-Voc.wav"))
+    if instrumental_path:
+        instrumental_path = instrumental_path.rename(instrumental_path.with_name(f"{source_name}-Inst.wav"))
     if instrumental_path:
         log(f"Instrumental: {instrumental_path}")
     else:
