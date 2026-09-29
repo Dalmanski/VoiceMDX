@@ -10,14 +10,15 @@ import time
 import atexit
 import importlib.metadata
 import importlib.util
-import wave
 from pathlib import Path
 from tkinter import filedialog
 
 import customtkinter as ctk
+import soundfile as sf
 import torch
 from widgets.console_textbox import ConsoleRedirect, ConsoleTextBox
 from widgets.ctk_theme import configure_ctk_theme
+from widgets.lyrics import LyricsOverlay
 from widgets.spectrum import SpectrumWidget
 from utils.ideal_voice import prepare_seed_vc_target
 from utils.vid2wav import convert_media_to_wav
@@ -154,7 +155,8 @@ class App(ctk.CTk):
         bottom.grid(row=1, column=0, sticky="ew", padx=self.safe_padding, pady=(0, 14))
         bottom.grid_propagate(False)
         bottom.grid_columnconfigure(0, weight=1)
-        self.spectrum = SpectrumWidget(self, bottom, height=72)
+        self.spectrum = SpectrumWidget(self, safe_zone, bottom)
+        self.lyrics = LyricsOverlay(self, self.spectrum, on_error=lambda message: self.log(message, color="orange"))
         self.generate_button = ctk.CTkButton(bottom, text="Generate Converted Vocal + Mix", command=self.gen_thread, height=52, font=ctk.CTkFont(size=16, weight="bold"))
         self.generate_button.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="ew")
         self.bottom_prev = ctk.CTkButton(bottom, text="▶", command=self.toggle_out_prev, width=52, height=52, font=ctk.CTkFont(size=18), state="disabled")
@@ -567,7 +569,7 @@ class App(ctk.CTk):
             shutil.copy2(self.converted_path, self.output_path)
             print(f"Final vocal created: {self._display_path(self.output_path)}")
             return
-        vocal_gain_db = seed_vc.get_mix_vocal_gain_db(self.inst_path, self.converted_path, target_offset_db=1.0, log=self.log)
+        vocal_gain_db = seed_vc.get_mix_vocal_gain_db(self.inst_path, self.converted_path, target_offset_db=0.0, log=self.log)
         filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume={vocal_gain_db:.2f}dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]", "[mix]alimiter=limit=0.95:level=false[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.inst_path), "-i", str(self.converted_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
@@ -659,7 +661,7 @@ class App(ctk.CTk):
             self.preview_kind = kind
             self.preview_loop = self.loop_enabled
             self.spectrum.play(path)
-            self.safe_zone.grid_configure(pady=(24, self.spectrum.visual_height + 10))
+            self.lyrics.start(path)
             self.set_prev_icons(kind)
             self.schedule_preview_end(path)
             print(f"Playing {kind} preview{' in loop' if self.loop_enabled else ''}: {self._display_path(path)}")
@@ -679,12 +681,7 @@ class App(ctk.CTk):
             self.preview_job = self.after(100, self.check_preview_process)
             return
         try:
-            with wave.open(str(path), "rb") as audio:
-                rate = audio.getframerate()
-                frames = audio.getnframes()
-            if rate <= 0 or frames <= 0:
-                return
-            duration_ms = max(100, int((frames / rate) * 1000) + 50)
+            duration_ms = max(100, int(sf.info(str(path)).duration * 1000) + 50)
             self.preview_job = self.after(duration_ms, lambda p=Path(path): self.preview_finished(p))
         except Exception:
             pass
@@ -754,7 +751,8 @@ class App(ctk.CTk):
         self.preview_loop = False
         if hasattr(self, "spectrum"):
             self.spectrum.stop()
-            self.safe_zone.grid_configure(pady=(24, 10))
+        if hasattr(self, "lyrics"):
+            self.lyrics.stop()
         if hasattr(self, "source_card"):
             self.set_prev_icons()
 
