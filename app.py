@@ -23,7 +23,7 @@ from widgets.spectrum import SpectrumWidget
 from utils.ideal_voice import prepare_seed_vc_target
 from utils.vid2wav import convert_media_to_wav
 from utils.config_manager import ConfigManager
-from utils.userprofile import display_user_path
+from utils.userprofile import display_user_path, display_user_paths
 
 uvr_spec = importlib.util.spec_from_file_location("uvr_mdx", Path(__file__).resolve().parent / "utils" / "uvr-mdx.py")
 uvr_mdx = importlib.util.module_from_spec(uvr_spec)
@@ -170,7 +170,7 @@ class App(ctk.CTk):
         self.clear_button.grid(row=0, column=4, padx=(8, 12), pady=12)
 
     def log(self, text, color=None, live=False):
-        self.console.log(text, color=color, live=live)
+        self.console.log(display_user_paths(text), color=color, live=live)
 
     def file_card(self, parent, row, title, subtitle, command, kind):
         card = ctk.CTkFrame(parent, width=self.card_width, height=SOURCE_TARGET_HEIGHT, corner_radius=12)
@@ -467,6 +467,8 @@ class App(ctk.CTk):
             print("Select a source first.")
             print("Status: Select source first")
             return
+        self.inst_name.configure(text="Loading...", text_color="orange")
+        self.vocal_name.configure(text="Loading...", text_color="orange")
         threading.Thread(target=self.sep_worker, daemon=True).start()
 
     def sep_worker(self):
@@ -476,6 +478,8 @@ class App(ctk.CTk):
             self.ensure_source_stems()
             print("Status: UVR separation complete")
         except Exception as exc:
+            self.after(0, lambda: self.inst_name.configure(text="Separation failed", text_color="red"))
+            self.after(0, lambda: self.vocal_name.configure(text="Separation failed", text_color="red"))
             print(f"UVR ERROR: {type(exc).__name__}: {exc}")
             print("Status: UVR separation failed")
         finally:
@@ -533,14 +537,18 @@ class App(ctk.CTk):
             return
         self.generating = True
         self.after(0, lambda: self.generate_button.configure(state="disabled", text="Converting + Mixing..."))
+        self.after(0, lambda: self.output_name.configure(text="Loading...", text_color="orange"))
+        self.after(0, lambda: self.converted_name.configure(text="Loading...", text_color="orange"))
         try:
             self.stop_prev()
+            self.lyrics.release_model()
+            self.cleanup_gpu()
             print("Status: Preparing separated source vocal and Inst / BG...")
             self.ensure_source_stems()
             seed_input = self.uvr_vocal_path
             print("Status: Cleaning target voice...")
             self.prepare_target_vocal()
-            self.seed_source_wav = seed_vc.prepare_source(seed_input, self.inputs_dir, self.ffmpeg, log=print)
+            self.seed_source_wav = seed_vc.prepare_source(seed_input, self.inputs_dir, self.ffmpeg, log=self.log)
             cfg = seed_vc.get_config(self.steps_choice_var.get(), self.follow_pitch_var.get(), self.mode_var.get(), self.semitone_var.get())
             print(f"Seed-VC steps: {cfg.steps}")
             print(f"Seed-VC strength: {cfg.cfg:.2f}")
@@ -565,6 +573,8 @@ class App(ctk.CTk):
             print("Status: Conversion complete")
             print(f"Final output: {display_user_path(self.output_path)}")
         except Exception as exc:
+            self.after(0, lambda: self.output_name.configure(text="Generation failed", text_color="red"))
+            self.after(0, lambda: self.converted_name.configure(text="Generation failed", text_color="red"))
             print(f"GENERATION ERROR: {type(exc).__name__}: {exc}")
             print("Status: Generation failed")
         finally:
@@ -579,12 +589,13 @@ class App(ctk.CTk):
             print(f"Final vocal created: {display_user_path(self.output_path)}")
             return
         vocal_gain_db = seed_vc.get_mix_vocal_gain_db(self.inst_path, self.converted_path, target_offset_db=0.0, log=self.log)
-        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume={vocal_gain_db:.2f}dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]", "[mix]alimiter=limit=0.95:level=false[out]"])
-        command = [self.ffmpeg, "-y", "-i", str(self.inst_path), "-i", str(self.converted_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(self.output_path)]
+        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume={vocal_gain_db:.2f}dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[out]"])
+        command = [self.ffmpeg, "-y", "-i", str(self.inst_path), "-i", str(self.converted_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_f32le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0 or not self.output_path.exists():
             self.log_process_output(completed.stdout)
             raise RuntimeError("Final mix failed.")
+        seed_vc.normalize_mix_volume(self.output_path, log=self.log)
         print(f"Final mix created: {display_user_path(self.output_path)}")
 
     def toggle_src_prev(self):
@@ -611,6 +622,8 @@ class App(ctk.CTk):
         self.toggle_prev("converted_vocal")
 
     def toggle_prev(self, kind):
+        if self.generating:
+            return
         if self.preview_kind == kind:
             self.stop_prev()
             return

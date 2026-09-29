@@ -18,8 +18,10 @@ BEST_OF = 5
 MAX_WORDS_PER_LINE = 10
 MAX_LINE_SECONDS = 6
 MAX_GAP_SECONDS = 1.0
+MAX_WORD_SECONDS = 1.5
 INSTRUMENTAL_GAP_SECONDS = 2.5
 WORD_LEAD_SECONDS = 0.05
+WORD_HOLD_SECONDS = 0.05
 COLOR_PAST = "#ffffff"
 COLOR_ACTIVE = "#ffd54a"
 COLOR_FUTURE = "#7d7d8c"
@@ -67,6 +69,13 @@ def get_model():
                 _model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
     return _model
 
+def unload_model():
+    global _model
+    with _model_lock:
+        model = _model
+        _model = None
+    del model
+
 def clean_words(segment):
     words = []
     for word in segment.words or []:
@@ -78,6 +87,10 @@ def clean_words(segment):
         if end <= start:
             end = start + 0.08
         words.append({"start": start, "end": end, "text": text})
+    if words:
+        words[0]["start"] = max(words[0]["start"], words[0]["end"] - MAX_WORD_SECONDS)
+    for word in words[1:]:
+        word["end"] = min(word["end"], word["start"] + MAX_WORD_SECONDS)
     for index in range(len(words) - 1):
         if words[index]["end"] > words[index + 1]["start"]:
             words[index]["end"] = max(words[index]["start"] + 0.05, words[index + 1]["start"])
@@ -145,6 +158,9 @@ class LyricsOverlay:
         self.visible = False
         self.poll_job = None
         self.last_frame = 0
+        self.workers = set()
+        self.worker_lock = threading.Lock()
+        self.releasing_model = False
         self.fonts = {}
         self.pools = {"text": [], "line": []}
         self.cursors = dict.fromkeys(self.pools, 0)
@@ -191,7 +207,12 @@ class LyricsOverlay:
         self.stop_event = threading.Event()
         self.visible = True
         self._prepare_idle()
-        threading.Thread(target=_transcribe_worker, args=(path, self.generation, self.stop_event, self.events), daemon=True).start()
+        with self.worker_lock:
+            if self.releasing_model:
+                return
+            worker = threading.Thread(target=_transcribe_worker, args=(path, self.generation, self.stop_event, self.events), daemon=True)
+            self.workers.add(worker)
+        worker.start()
         self._tick()
 
     def stop(self):
@@ -210,6 +231,22 @@ class LyricsOverlay:
         for pool in self.pools.values():
             pool.clear()
         self.container.place_forget()
+
+    def release_model(self):
+        with self.worker_lock:
+            self.releasing_model = True
+            workers = tuple(self.workers)
+        active_workers = [worker for worker in workers if worker.is_alive()]
+        if active_workers:
+            print("Status: Waiting for lyrics transcription to stop...")
+        for worker in workers:
+            if worker is not threading.current_thread():
+                worker.join()
+        with self.worker_lock:
+            self.workers.difference_update(workers)
+        unload_model()
+        with self.worker_lock:
+            self.releasing_model = False
 
     def _prepare_idle(self):
         self.words = []
@@ -261,7 +298,8 @@ class LyricsOverlay:
             if line["start"] > now:
                 break
             line_index = index
-        word_index = -1
+        active = -1
+        past = 0
         if line_index >= 0:
             line = self.lines[line_index]
             next_start = self.lines[line_index + 1]["start"] if line_index + 1 < len(self.lines) else None
@@ -271,8 +309,12 @@ class LyricsOverlay:
                 for index, word in enumerate(line["words"]):
                     if word["start"] > now:
                         break
-                    word_index = index
-        return line_index, word_index
+                    active = index
+                    past = index
+                if active >= 0 and now > line["words"][active]["end"] + WORD_HOLD_SECONDS:
+                    past = active + 1
+                    active = -1
+        return line_index, active, past
 
     def _tick(self):
         if not self.visible:
@@ -282,7 +324,7 @@ class LyricsOverlay:
         dt = min(0.05, max(0.001, real - self.last_frame))
         self.last_frame = real
         now = real - self.started + WORD_LEAD_SECONDS
-        line_index, word_index = self._locate(now)
+        line_index, active, past = self._locate(now)
         if line_index != self.cur_line:
             self.cur_line = line_index
             self.line_t0 = real
@@ -290,7 +332,7 @@ class LyricsOverlay:
                 self._prepare_line(line_index)
             else:
                 self._prepare_idle()
-        self._draw(real, now, dt, word_index)
+        self._draw(real, now, dt, active, past)
         self.poll_job = self.parent.after(FRAME_MS, self._tick)
 
     def _put(self, kind, coords, **options):
@@ -312,7 +354,7 @@ class LyricsOverlay:
             for dx, dy in RING:
                 self._text(x + dx * radius * scale, y + dy * radius * scale, text, font, color, anchor)
 
-    def _draw(self, real, now, dt, word_index):
+    def _draw(self, real, now, dt, active, past):
         self.cursors = dict.fromkeys(self.pools, 0)
         width = self.canvas.winfo_width()
         height = self.canvas.winfo_height()
@@ -321,7 +363,7 @@ class LyricsOverlay:
         if height <= 1:
             height = max(1, self.box_h - 10)
         if self.cur_line is not None and self.cur_line >= 0 and self.words:
-            self._draw_line(real, now, dt, word_index, width, height)
+            self._draw_line(real, now, dt, active, past, width, height)
         else:
             self._draw_idle(real, width, height)
         for kind, pool in self.pools.items():
@@ -336,7 +378,7 @@ class LyricsOverlay:
         self._glow_text(cx, cy, "\u266a", font, "center", 0.5 + 0.5 * pulse, 1.0, 1.0)
         self._text(cx, cy, "\u266a", font, _hex(_lerp(self.c_active, self.c_past, pulse * 0.35)), "center")
 
-    def _draw_line(self, real, now, dt, word_index, width, height):
+    def _draw_line(self, real, now, dt, active, past, width, height):
         fade = 1 - (1 - min(1.0, (real - self.line_t0) / LINE_FADE_SECONDS)) ** 3
         scale = min(1.0, (height - 6) / max(1.0, self.n_rows * ROW_H))
         row_h = ROW_H * scale
@@ -348,9 +390,9 @@ class LyricsOverlay:
             total = -space
             for index in row:
                 word = self.words[index]
-                word["v"] += (SPRING_K * ((1.0 if index == word_index else 0.0) - word["a"]) - SPRING_C * word["v"]) * dt
+                word["v"] += (SPRING_K * ((1.0 if index == active else 0.0) - word["a"]) - SPRING_C * word["v"]) * dt
                 word["a"] = max(-0.15, min(1.35, word["a"] + word["v"] * dt))
-                target_color = self.c_past if index < word_index else self.c_active if index == word_index else self.c_future
+                target_color = self.c_past if index < past else self.c_active if index == active else self.c_future
                 word["col"] = _lerp(word["col"], target_color, follow)
                 font = self._font((BASE_PX + (ACTIVE_PX - BASE_PX) * max(0.0, word["a"])) * scale)
                 w = font.measure(word["text"])
@@ -361,12 +403,11 @@ class LyricsOverlay:
             y = row_bottom - 5 * scale
             for index, word, font, w in metas:
                 amount = max(0.0, min(1.0, word["a"]))
-                active = index == word_index
                 if amount > 0.03:
-                    pulse = 0.85 + 0.15 * math.sin(real * 8) if active else 1.0
+                    pulse = 0.85 + 0.15 * math.sin(real * 8) if index == active else 1.0
                     self._glow_text(x, y, word["text"], font, "sw", amount * pulse, scale * (0.8 + 0.4 * amount), fade)
                 self._text(x, y, word["text"], font, _hex(_lerp(self.bg, word["col"], fade)), "sw")
-                if active:
+                if index == active:
                     progress = max(0.0, min(1.0, (now - word["start"]) / max(0.05, word["end"] - word["start"])))
                     self._put("line", (x, row_bottom - 1.5 * scale, x + w * progress, row_bottom - 1.5 * scale), fill=_hex(_lerp(self.bg, self.c_glow, fade)), width=2, capstyle="round")
                 x += w + space

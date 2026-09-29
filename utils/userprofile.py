@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -36,3 +37,18 @@ def display_user_path(path, temp_root=None):
 		return raw
 	except Exception:
 		return str(path)
+
+
+def display_user_paths(text):
+	if not isinstance(text, str):
+		return text
+
+	def replace_path(match):
+		raw = match.group(0)
+		suffix = ""
+		while raw and raw[-1] in ".,;:)]}\"'":
+			suffix = raw[-1] + suffix
+			raw = raw[:-1]
+		return display_user_path(raw) + suffix
+
+	return re.sub(r"(?i)[A-Z]:\\[^\r\n]+", replace_path, text)

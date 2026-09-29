@@ -20,7 +20,7 @@ MAX_SEMITONE = 72
 VOCAL_LEAD_DB = 2.0
 MAX_VOCAL_DB = -12.0
 PEAK_CEILING_DB = -1.0
-
+MIX_TARGET_DB = -18.0
 
 @dataclass(frozen=True)
 class SeedVCSettings:
@@ -29,7 +29,6 @@ class SeedVCSettings:
     f0: bool = False
     auto_f0: bool = True
     pitch: int = 0
-
 
 def patch_bigvgan():
     if not BIGVGAN_FILE.exists():
@@ -44,7 +43,6 @@ def patch_bigvgan():
         return "BigVGAN compatibility patch ready."
     except Exception as exc:
         return f"BigVGAN patch error: {type(exc).__name__}: {exc}"
-
 
 def match_audio_volume(reference_path, target_path, log=print):
     if not reference_path or not target_path:
@@ -71,7 +69,6 @@ def match_audio_volume(reference_path, target_path, log=print):
     log(f"Matched converted voice volume to separated vocal: {gain_db:+.2f} dB")
     return target_path
 
-
 def measure_active_db(audio, frame=4096, range_db=25.0):
     mono = audio.astype(np.float64).mean(axis=1)
     count = len(mono) // frame
@@ -83,34 +80,42 @@ def measure_active_db(audio, frame=4096, range_db=25.0):
     active = power >= np.percentile(power, 95) * 10 ** (-range_db / 10)
     return float(10 * np.log10(power[active].mean()))
 
+def normalize_mix_volume(path, log=print):
+    audio, rate = sf.read(path, dtype="float32", always_2d=True)
+    mix_db = measure_active_db(audio)
+    if mix_db is None:
+        return path
+    peak_db = 20 * np.log10(max(float(np.abs(audio).max()), 1e-9))
+    gain_db = min(MIX_TARGET_DB - mix_db, PEAK_CEILING_DB - peak_db)
+    sf.write(path, audio * 10 ** (gain_db / 20.0), rate, subtype="PCM_16")
+    log(f"Final mix level: {mix_db:+.2f} dBFS, peak {peak_db:+.2f} dBFS; applying {gain_db:+.2f} dB to target {mix_db + gain_db:+.2f} dBFS.")
+    return path
 
-def get_mix_vocal_gain_db(instrumental_path, converted_path, target_offset_db=VOCAL_LEAD_DB, log=print):
-    if not instrumental_path or not converted_path:
-        return 0.0
-    instrumental_path = Path(instrumental_path)
-    converted_path = Path(converted_path)
-    if not instrumental_path.exists() or not converted_path.exists():
-        return 0.0
-    instrumental, _ = sf.read(instrumental_path, dtype="float32", always_2d=True)
-    converted, _ = sf.read(converted_path, dtype="float32", always_2d=True)
-    instrumental_db = measure_active_db(instrumental)
-    converted_db = measure_active_db(converted)
+def read_active_db(path):
+    if not path or not Path(path).exists():
+        return None
+    audio, _ = sf.read(path, dtype="float32", always_2d=True)
+    return measure_active_db(audio)
+
+def get_mix_vocal_gain_db(instrumental_path, converted_path, target_offset_db=0.0, log=print, reference_path=None):
+    instrumental_db = read_active_db(instrumental_path)
+    reference_db = read_active_db(reference_path)
+    converted_db = read_active_db(converted_path)
     if instrumental_db is None or converted_db is None:
-        log("Mix balance unchanged: instrumental or converted voice is silent.")
+        log("Mix balance unchanged: instrumental or converted voice is silent or missing.")
         return 0.0
-    peak_db = 20 * np.log10(max(float(np.abs(converted).max()), 1e-9))
-    target_vocal_db = min(instrumental_db + target_offset_db, MAX_VOCAL_DB)
-    gain_db = min(target_vocal_db - converted_db, PEAK_CEILING_DB - peak_db)
-    log(f"Vocal level: instrumental {instrumental_db:+.2f} dBFS, converted voice {converted_db:+.2f} dBFS, peak {peak_db:+.2f} dBFS; applying {gain_db:+.2f} dB to target {target_vocal_db:+.2f} dBFS.")
+    anchor_db = (converted_db if reference_db is None else reference_db) + target_offset_db
+    target_vocal_db = max(anchor_db, instrumental_db + VOCAL_LEAD_DB)
+    gain_db = target_vocal_db - converted_db
+    reference_text = "matched" if reference_db is None else f"{reference_db:+.2f} dBFS"
+    log(f"Vocal level: instrumental {instrumental_db:+.2f} dBFS, separated vocal {reference_text}, converted voice {converted_db:+.2f} dBFS; applying {gain_db:+.2f} dB to target {target_vocal_db:+.2f} dBFS.")
     return float(gain_db)
-
 
 def prepare_source(source_path, inputs_dir, ffmpeg_path, log=print):
     seed_source_wav = Path(inputs_dir) / "seed_source.wav"
     convert_media_to_wav(source_path, seed_source_wav, ffmpeg_path=ffmpeg_path, channels=1, sample_rate=44100, label="source vocal")
     log(f"Source vocal audio ready: {seed_source_wav}")
     return seed_source_wav
-
 
 def get_config(steps_choice="Recommended", follow_pitch="Target Voice Pitch", mode="Vocalize", semitone=0):
     steps = DIFFUSION_STEP_OPTIONS.get(steps_choice, 50)
@@ -120,10 +125,8 @@ def get_config(steps_choice="Recommended", follow_pitch="Target Voice Pitch", mo
     pitch = max(MIN_SEMITONE, min(MAX_SEMITONE, int(semitone)))
     return SeedVCSettings(steps=steps, f0=vocalize, auto_f0=auto_f0, pitch=pitch)
 
-
 def command(source_wav, target_wav, output_dir, cfg):
     return [sys.executable, str(INFERENCE_SCRIPT), "--source", str(source_wav), "--target", str(target_wav), "--output", str(output_dir), "--diffusion-steps", str(cfg.steps), "--length-adjust", "1.0", "--inference-cfg-rate", str(cfg.cfg), "--f0-condition", str(cfg.f0), "--auto-f0-adjust", str(cfg.auto_f0), "--semi-tone-shift", str(cfg.pitch), "--fp16", "True"]
-
 
 def run(source_wav, target_wav, output_dir, cfg, log=print, output_name=None):
     output_dir = Path(output_dir)
