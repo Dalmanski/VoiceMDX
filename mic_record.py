@@ -2,10 +2,11 @@ import os
 import sys
 import time
 import tempfile
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import numpy as np
 import sounddevice as sd
@@ -48,6 +49,9 @@ class MicRecorderApp(ctk.CTk):
         self.trim_end = 0.0
         self.drag_target = None
         self.devices = {}
+        self.wo_mic_search_job = None
+        self.wo_mic_device_job = None
+        self.wo_mic_search_deadline = 0.0
         self.waveform_height = 240
         self.build_ui()
         self.refresh_devices()
@@ -60,8 +64,10 @@ class MicRecorderApp(ctk.CTk):
         device_label.grid(row=0, column=0, padx=(20, 15), pady=18)
         self.device_menu = ctk.CTkOptionMenu(device_frame, values=["No active microphone found"], height=40)
         self.device_menu.grid(row=0, column=1, padx=10, pady=18, sticky="ew")
+        self.wo_mic_button = ctk.CTkButton(device_frame, text="WO MIC", width=110, height=40, command=self.use_wo_mic)
+        self.wo_mic_button.grid(row=0, column=2, padx=10, pady=18)
         self.refresh_button = ctk.CTkButton(device_frame, text="REFRESH", width=110, height=40, command=self.refresh_devices)
-        self.refresh_button.grid(row=0, column=2, padx=(10, 20), pady=18)
+        self.refresh_button.grid(row=0, column=3, padx=(10, 20), pady=18)
         content = ctk.CTkFrame(self, fg_color="transparent", border_width=0, corner_radius=0)
         content.grid(row=2, column=0, padx=38, pady=(0, 16), sticky="ew")
         content.grid_rowconfigure(0, minsize=270)
@@ -175,6 +181,68 @@ class MicRecorderApp(ctk.CTk):
     def get_selected_device(self):
         return self.devices.get(self.device_menu.get())
 
+    def get_wo_mic_exe(self):
+        paths = [Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "WOMic" / "WOMicClient.exe", Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "WOMic" / "WOMicClient.exe", Path(os.environ.get("LOCALAPPDATA", "")) / "WOMic" / "WOMicClient.exe"]
+        for path in paths:
+            if path.is_file():
+                return path
+        return None
+
+    def use_wo_mic(self):
+        self.cancel_wo_mic_search()
+        self.wo_mic_search_deadline = time.monotonic() + 15
+        self.wo_mic_button.configure(text="SEARCHING...", state="disabled")
+        self.status_label.configure(text="Searching for WO Mic Client...")
+        self.search_wo_mic()
+
+    def search_wo_mic(self):
+        exe_path = self.get_wo_mic_exe()
+        if exe_path:
+            try:
+                os.startfile(str(exe_path))
+                self.status_label.configure(text="WO Mic Client opened, looking for WO Mic Device...")
+                self.wo_mic_device_job = self.after(1000, self.select_wo_mic_device)
+            except Exception as error:
+                self.status_label.configure(text=f"WO Mic launch error: {error}")
+                self.wo_mic_button.configure(text="WO MIC", state="normal")
+            return
+        if time.monotonic() < self.wo_mic_search_deadline:
+            self.wo_mic_search_job = self.after(1000, self.search_wo_mic)
+            return
+        self.wo_mic_search_job = None
+        if messagebox.askyesno("WO Mic not found", "WO Mic Client was not found. Open the official WO Mic download page?"):
+            webbrowser.open("https://wolicheng.com/womic/download.html")
+            self.wo_mic_search_deadline = time.monotonic() + 120
+            self.wo_mic_search_job = self.after(1000, self.search_wo_mic)
+        else:
+            self.wo_mic_button.configure(text="WO MIC", state="normal")
+            self.status_label.configure(text="WO Mic Client not found")
+
+    def select_wo_mic_device(self):
+        self.refresh_devices()
+        for name in self.devices:
+            if "wo mic" in name.lower():
+                self.device_menu.set(name)
+                self.status_label.configure(text=f"WO Mic selected: {name}")
+                self.wo_mic_button.configure(text="WO MIC", state="normal")
+                self.wo_mic_device_job = None
+                self.cancel_wo_mic_search()
+                return
+        if time.monotonic() < self.wo_mic_search_deadline:
+            self.wo_mic_device_job = self.after(1000, self.select_wo_mic_device)
+            return
+        self.wo_mic_device_job = None
+        self.wo_mic_button.configure(text="WO MIC", state="normal")
+        self.status_label.configure(text="WO Mic Client opened, but WO Mic Device was not detected")
+
+    def cancel_wo_mic_search(self):
+        if self.wo_mic_search_job is not None:
+            self.after_cancel(self.wo_mic_search_job)
+            self.wo_mic_search_job = None
+        if self.wo_mic_device_job is not None:
+            self.after_cancel(self.wo_mic_device_job)
+            self.wo_mic_device_job = None
+
     def toggle_recording(self):
         if not self.recording_session:
             self.start_recording()
@@ -210,6 +278,7 @@ class MicRecorderApp(ctk.CTk):
             self.record_button.configure(text="PAUSE")
             self.stop_button.configure(state="normal")
             self.refresh_button.configure(state="disabled")
+            self.wo_mic_button.configure(state="disabled")
             self.device_menu.configure(state="disabled")
             self.preview_button.configure(state="disabled")
             self.restart_button.configure(state="disabled")
@@ -270,6 +339,7 @@ class MicRecorderApp(ctk.CTk):
         self.record_button.configure(text="RECORD", state="normal")
         self.stop_button.configure(state="disabled")
         self.refresh_button.configure(state="normal")
+        self.wo_mic_button.configure(state="normal")
         self.device_menu.configure(state="normal")
         self.timer_label.configure(text=self.format_duration(self.recorded_duration))
         self.cancel_record_timers()
@@ -587,6 +657,7 @@ class MicRecorderApp(ctk.CTk):
         self.preview_playing = False
         self.cancel_preview_timer()
         sd.stop()
+        self.cancel_wo_mic_search()
         if self.temp_path and os.path.exists(self.temp_path):
             try:
                 os.remove(self.temp_path)
