@@ -588,7 +588,7 @@ class App(ctk.CTk):
             shutil.copy2(self.converted_path, self.output_path)
             print(f"Final vocal created: {display_user_path(self.output_path)}")
             return
-        vocal_gain_db = seed_vc.get_mix_vocal_gain_db(self.inst_path, self.converted_path, target_offset_db=0.0, log=self.log)
+        vocal_gain_db = seed_vc.get_mix_vocal_gain_db(self.inst_path, self.converted_path, log=self.log)
         filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume={vocal_gain_db:.2f}dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.inst_path), "-i", str(self.converted_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_f32le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")

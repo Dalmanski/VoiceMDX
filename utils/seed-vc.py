@@ -20,7 +20,7 @@ MAX_SEMITONE = 72
 VOCAL_LEAD_DB = 2.0
 MAX_VOCAL_DB = -12.0
 PEAK_CEILING_DB = -1.0
-MIX_TARGET_DB = -18.0
+MIX_TARGET_DB = -14.0
 
 @dataclass(frozen=True)
 class SeedVCSettings:
