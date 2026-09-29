@@ -1,0 +1,38 @@
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+
+def display_user_path(path, temp_root=None):
+	try:
+		raw = str(path)
+		if not raw:
+			return raw
+		candidate = os.path.normpath(raw)
+		if sys.platform.startswith("win"):
+			try:
+				import ctypes
+				long_path = ctypes.create_unicode_buffer(32768)
+				if ctypes.windll.kernel32.GetLongPathNameW(candidate, long_path, len(long_path)):
+					candidate = long_path.value
+			except Exception:
+				pass
+		candidate = os.path.abspath(candidate)
+		temp_root = os.path.normpath(str(temp_root or (Path(tempfile.gettempdir()) / "voicemdx_temp")))
+		user_profile = os.path.normpath(os.environ.get("USERPROFILE", str(Path.home())))
+		try:
+			rel = os.path.relpath(candidate, temp_root)
+			if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+				return os.path.join("%USERPROFILE%", "AppData", "Local", "Temp", "voicemdx_temp", rel)
+		except (ValueError, OSError):
+			pass
+		try:
+			rel = os.path.relpath(candidate, user_profile)
+			if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+				return os.path.join("%USERPROFILE%", rel)
+		except (ValueError, OSError):
+			pass
+		return raw
+	except Exception:
+		return str(path)

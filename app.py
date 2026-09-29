@@ -23,6 +23,7 @@ from widgets.spectrum import SpectrumWidget
 from utils.ideal_voice import prepare_seed_vc_target
 from utils.vid2wav import convert_media_to_wav
 from utils.config_manager import ConfigManager
+from utils.userprofile import display_user_path
 
 uvr_spec = importlib.util.spec_from_file_location("uvr_mdx", Path(__file__).resolve().parent / "utils" / "uvr-mdx.py")
 uvr_mdx = importlib.util.module_from_spec(uvr_spec)
@@ -327,7 +328,7 @@ class App(ctk.CTk):
             return
         recorder_path = BASE_DIR / "mic_record.py"
         if not recorder_path.exists():
-            print(f"Mic recorder not found: {self._display_path(recorder_path)}")
+            print(f"Mic recorder not found: {display_user_path(recorder_path)}")
             print("Status: Mic recorder not found")
             return
         output_path = self.inputs_dir / "mic_source.wav"
@@ -352,7 +353,7 @@ class App(ctk.CTk):
             return
         editor_path = BASE_DIR / "tts_editor.py"
         if not editor_path.exists():
-            print(f"TTS editor not found: {self._display_path(editor_path)}")
+            print(f"TTS editor not found: {display_user_path(editor_path)}")
             print("Status: TTS editor not found")
             return
         output_path = self.inputs_dir / "tts_source.wav"
@@ -407,7 +408,7 @@ class App(ctk.CTk):
         self.source_path = path
         self.clear_prev_proc()
         self.source_card["name"].configure(text=path.name, text_color="green")
-        print(f"{source_name} source applied: {self._display_path(path)}")
+        print(f"{source_name} source applied: {display_user_path(path)}")
         print(f"Status: {source_name} WAV loaded as Source")
         self.sep_thread()
 
@@ -426,7 +427,7 @@ class App(ctk.CTk):
         self.source_card["name"].configure(text=self.source_path.name, text_color="green")
         self.clear_prev_proc()
         self.has_background = True
-        print(f"Source selected: {self._display_path(self.source_path)}")
+        print(f"Source selected: {display_user_path(self.source_path)}")
         print("Status: Source selected")
         self.sep_thread()
 
@@ -441,7 +442,7 @@ class App(ctk.CTk):
         self.target_vocal_path = None
         self.target_path = Path(path)
         self.target_card["name"].configure(text=self.target_path.name, text_color="green")
-        print(f"Target selected: {self._display_path(self.target_path)}")
+        print(f"Target selected: {display_user_path(self.target_path)}")
         self.target_loading = True
         self.target_card["preview"].configure(state="disabled", text="…")
         print("Status: Preparing target voice...")
@@ -480,10 +481,18 @@ class App(ctk.CTk):
         finally:
             self.separating = False
 
+    def _log_uvr(self, text):
+        for label in ("Instrumental", "Source vocal"):
+            prefix = f"{label}: "
+            if text.startswith(prefix):
+                text = f"{prefix}{display_user_path(text[len(prefix):])}"
+                break
+        self.log(text)
+
     def ensure_source_stems(self):
         if self.inst_path and self.inst_path.exists() and self.uvr_vocal_path and self.uvr_vocal_path.exists():
             return
-        stems = uvr_mdx.ensure_source_stems(self.source_path, self.ffmpeg, self.inputs_dir, self.vocal_dir, self.inst_dir, log=self.log, cleanup_gpu=self.cleanup_gpu)
+        stems = uvr_mdx.ensure_source_stems(self.source_path, self.ffmpeg, self.inputs_dir, self.vocal_dir, self.inst_dir, log=self._log_uvr, cleanup_gpu=self.cleanup_gpu)
         self.uvr_vocal_path = stems.vocal_path
         self.inst_path = stems.instrumental_path
         self.has_background = stems.has_background
@@ -507,7 +516,7 @@ class App(ctk.CTk):
         if not self.ffmpeg:
             raise RuntimeError(f"FFmpeg was not found: {FFMPEG}")
         convert_media_to_wav(input_path, output_path, ffmpeg_path=self.ffmpeg, channels=channels, sample_rate=44100, label=label)
-        print(f"{label.title()} audio ready: {self._display_path(output_path)}")
+        print(f"{label.title()} audio ready: {display_user_path(output_path)}")
 
     def gen_thread(self):
         if self.generating or self.separating or self.target_loading:
@@ -554,7 +563,7 @@ class App(ctk.CTk):
             self.after(0, lambda: self.bottom_prev.configure(state="normal", text="▶"))
             self.after(0, lambda: self.bottom_dl.configure(state="normal"))
             print("Status: Conversion complete")
-            print(f"Final output: {self._display_path(self.output_path)}")
+            print(f"Final output: {display_user_path(self.output_path)}")
         except Exception as exc:
             print(f"GENERATION ERROR: {type(exc).__name__}: {exc}")
             print("Status: Generation failed")
@@ -567,7 +576,7 @@ class App(ctk.CTk):
         self.output_path = self.output_dir / f"{self.source_path.stem} {self.target_path.stem} Cover.wav"
         if not self.has_background:
             shutil.copy2(self.converted_path, self.output_path)
-            print(f"Final vocal created: {self._display_path(self.output_path)}")
+            print(f"Final vocal created: {display_user_path(self.output_path)}")
             return
         vocal_gain_db = seed_vc.get_mix_vocal_gain_db(self.inst_path, self.converted_path, target_offset_db=0.0, log=self.log)
         filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume={vocal_gain_db:.2f}dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix]", "[mix]alimiter=limit=0.95:level=false[out]"])
@@ -576,7 +585,7 @@ class App(ctk.CTk):
         if completed.returncode != 0 or not self.output_path.exists():
             self.log_process_output(completed.stdout)
             raise RuntimeError("Final mix failed.")
-        print(f"Final mix created: {self._display_path(self.output_path)}")
+        print(f"Final mix created: {display_user_path(self.output_path)}")
 
     def toggle_src_prev(self):
         self.toggle_prev("source")
@@ -664,7 +673,7 @@ class App(ctk.CTk):
             self.lyrics.start(path)
             self.set_prev_icons(kind)
             self.schedule_preview_end(path)
-            print(f"Playing {kind} preview{' in loop' if self.loop_enabled else ''}: {self._display_path(path)}")
+            print(f"Playing {kind} preview{' in loop' if self.loop_enabled else ''}: {display_user_path(path)}")
         except Exception as exc:
             self.preview_process = self.preview_kind = None
             self.preview_path = None
@@ -758,7 +767,7 @@ class App(ctk.CTk):
 
     def check_env(self):
         problems = []
-        ffmpeg_status = self._display_path(self.ffmpeg) if self.ffmpeg else f"missing: {self._display_path(FFMPEG)}"
+        ffmpeg_status = display_user_path(self.ffmpeg) if self.ffmpeg else f"missing: {display_user_path(FFMPEG)}"
         print(f"FFmpeg: {ffmpeg_status}")
         print(f"Seed-VC: {'found' if seed_vc.INFERENCE_SCRIPT.exists() else 'missing'}")
         print(f"Inst_HQ_4: {'found' if uvr_mdx.UVR_INSTRUMENT_MODEL.exists() else 'missing'}")
@@ -829,7 +838,7 @@ class App(ctk.CTk):
         path = filedialog.asksaveasfilename(title=title, defaultextension=".wav", filetypes=[("WAV Files", "*.wav")], initialfile=Path(source_path).name)
         if path:
             shutil.copy2(source_path, path)
-            print(f"Saved: {self._display_path(path)}")
+            print(f"Saved: {display_user_path(path)}")
             print("Status: WAV saved")
 
     def dl_inst(self):
@@ -911,39 +920,6 @@ class App(ctk.CTk):
             for line in text.splitlines():
                 if line.strip():
                     print(line)
-
-    def _display_path(self, path):
-        try:
-            raw = str(path)
-            if not raw:
-                return raw
-            candidate = os.path.normpath(raw)
-            if sys.platform.startswith("win"):
-                try:
-                    import ctypes
-                    long_path = ctypes.create_unicode_buffer(32768)
-                    if ctypes.windll.kernel32.GetLongPathNameW(candidate, long_path, len(long_path)):
-                        candidate = long_path.value
-                except Exception:
-                    pass
-            candidate = os.path.abspath(candidate)
-            temp_root = os.path.normpath(str(TEMP_ROOT))
-            user_profile = os.path.normpath(os.environ.get("USERPROFILE", str(Path.home())))
-            try:
-                rel = os.path.relpath(candidate, temp_root)
-                if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
-                    return os.path.join("%USERPROFILE%", "AppData", "Local", "Temp", "voicemdx_temp", rel)
-            except (ValueError, OSError):
-                pass
-            try:
-                rel = os.path.relpath(candidate, user_profile)
-                if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
-                    return os.path.join("%USERPROFILE%", rel)
-            except (ValueError, OSError):
-                pass
-            return raw
-        except Exception:
-            return str(path)
 
 if __name__ == "__main__":
     app = App()
