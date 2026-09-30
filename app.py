@@ -559,7 +559,6 @@ class App(ctk.CTk):
             target_name = self.target_path.stem
             converted_name = f"{self.source_path.stem}-voc_{target_name}.wav"
             self.converted_path = seed_vc.run(self.seed_source_wav, self.target_wav, self.seed_output_dir, cfg, log=self.log, output_name=converted_name)
-            self.converted_path = seed_vc.match_audio_volume(self.uvr_vocal_path, self.converted_path, log=self.log)
             print("Status: Mixing final output...")
             self.mix_final()
             self.after(0, lambda: self.output_name.configure(text=self.output_path.name, text_color="green"))
@@ -588,14 +587,12 @@ class App(ctk.CTk):
             shutil.copy2(self.converted_path, self.output_path)
             print(f"Final vocal created: {display_user_path(self.output_path)}")
             return
-        vocal_gain_db = seed_vc.get_mix_vocal_gain_db(self.inst_path, self.converted_path, log=self.log)
-        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", f"[1:a]aresample=44100,volume={vocal_gain_db:.2f}dB[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[out]"])
+        filter_complex = chr(59).join(["[0:a]aresample=44100[a0]", "[1:a]aresample=44100[a1]", "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[out]"])
         command = [self.ffmpeg, "-y", "-i", str(self.inst_path), "-i", str(self.converted_path), "-filter_complex", filter_complex, "-map", "[out]", "-ar", "44100", "-ac", "2", "-c:a", "pcm_f32le", str(self.output_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0 or not self.output_path.exists():
             self.log_process_output(completed.stdout)
             raise RuntimeError("Final mix failed.")
-        seed_vc.normalize_mix_volume(self.output_path, log=self.log)
         print(f"Final mix created: {display_user_path(self.output_path)}")
 
     def toggle_src_prev(self):
