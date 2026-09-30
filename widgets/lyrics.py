@@ -26,8 +26,8 @@ COLOR_PAST = "#ffffff"
 COLOR_ACTIVE = "#ffd54a"
 COLOR_FUTURE = "#7d7d8c"
 COLOR_GLOW = "#ff9d00"
-BASE_PX = 26
-ACTIVE_PX = 42
+BASE_PX = 30
+ACTIVE_PX = 38
 IDLE_PX = 34
 ROW_H = ACTIVE_PX * 1.3
 SPRING_K = 380.0
@@ -171,7 +171,7 @@ class LyricsOverlay:
         self.n_rows = 1
         self.box_w = 150
         self.box_h = 76
-        self.container = ctk.CTkFrame(spectrum.top_panel, width=180, height=76, corner_radius=12, border_width=1, border_color=spectrum.top_panel.cget("border_color"), fg_color=spectrum.top_panel.cget("fg_color"))
+        self.container = ctk.CTkFrame(spectrum.top_panel, width=180, height=76, corner_radius=12, border_width=1, fg_color=spectrum.top_panel.cget("fg_color"))
         self.canvas = tk.Canvas(self.container, background=spectrum.top_base, highlightthickness=0, borderwidth=0, takefocus=0, cursor="arrow")
         self.canvas.pack(fill="both", expand=True, padx=8, pady=5)
         self.bg = self._rgb(spectrum.top_base)

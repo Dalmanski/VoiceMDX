@@ -92,7 +92,7 @@ class SpectrumWidget:
         self.parent, self.safe_zone, self.bottom, self.count = parent, safe_zone, bottom, bars
         self.panels, self.canvases, self.visuals = [], [], []
         for _ in range(2):
-            panel = ctk.CTkFrame(parent, width=self.panel_width, height=1, corner_radius=12, border_width=1, border_color=("gray55", "gray45"))
+            panel = ctk.CTkFrame(parent, width=self.panel_width, height=1, corner_radius=0, border_width=0)
             background = panel._apply_appearance_mode(panel.cget("fg_color"))
             canvas = ctk.CTkCanvas(panel, highlightthickness=0, borderwidth=0, bg=background)
             canvas.pack(fill="both", expand=True, padx=5, pady=6)
@@ -100,7 +100,7 @@ class SpectrumWidget:
             self.panels.append(panel)
             self.canvases.append(canvas)
             self.visuals.append({"bg": self.shapes(canvas, self.gradient_steps), "glow": self.shapes(canvas, bars), "bars": self.shapes(canvas, bars), "caps": self.shapes(canvas, bars, "#ffffff"), "sparks": self.shapes(canvas, 48)})
-        self.top_panel = ctk.CTkFrame(parent, width=1, height=self.top_height, corner_radius=12, border_width=1, border_color=("gray55", "gray45"))
+        self.top_panel = ctk.CTkFrame(parent, width=1, height=self.top_height, corner_radius=12, border_width=1)
         self.top_base = self.top_panel._apply_appearance_mode(self.top_panel.cget("fg_color"))
         self.top_canvas = ctk.CTkCanvas(self.top_panel, highlightthickness=0, borderwidth=0, bg=self.top_base)
         self.top_canvas.pack(fill="both", expand=True, padx=6, pady=5)
