@@ -21,7 +21,6 @@ from widgets.ctk_theme import configure_ctk_theme
 from widgets.lyrics import LyricsOverlay
 from widgets.spectrum import SpectrumWidget
 from utils.ideal_voice import prepare_seed_vc_target
-from utils.vid2wav import convert_media_to_wav
 from utils.config_manager import ConfigManager
 from utils.userprofile import display_user_path, display_user_paths
 
@@ -75,24 +74,22 @@ class App(ctk.CTk):
         self.minsize(980, 900)
         self.protocol("WM_DELETE_WINDOW", self.close_app)
         self.mode_var = ctk.StringVar(value="Vocalize")
-        self.steps_var = ctk.IntVar(value=50)
         self.steps_choice_var = ctk.StringVar(value="Recommended")
         self.follow_pitch_var = ctk.StringVar(value="Target Voice Pitch")
         self.semitone_var = ctk.IntVar(value=0)
         self.source_path = self.target_path = self.output_path = None
         self.has_background = True
-        self.source_wav = self.target_wav = self.seed_source_wav = None
+        self.target_wav = self.seed_source_wav = None
         self.uvr_vocal_path = self.inst_path = self.target_vocal_path = None
-        self.converted_path = self.conv_prev = None
+        self.converted_path = None
         self.src_prev_wav = self.tgt_prev_wav = None
         self.tts_process = None
         self.tts_output_path = None
         self.mic_process = None
         self.mic_output_path = None
-        self.process = self.preview_process = self.preview_kind = None
+        self.preview_process = self.preview_kind = None
         self.preview_path = None
         self.preview_job = None
-        self.preview_loop = False
         self.loop_enabled = False
         self.generating = self.separating = self.target_loading = False
         self.ffmpeg = str(FFMPEG) if FFMPEG.exists() else None
@@ -101,12 +98,10 @@ class App(ctk.CTk):
         self.preview_dir = self.session_dir / "preview"
         self.inst_dir = self.session_dir / "instrumental"
         self.vocal_dir = self.session_dir / "vocal"
-        self.target_vocal_dir = self.session_dir / "target_vocal"
-        self.normalized_dir = self.session_dir / "normalized"
         self.seed_output_dir = self.session_dir / "seed_output"
         self.output_dir = self.session_dir / "output"
         cleanup_old_sessions(self.session_dir)
-        for path in [self.inputs_dir, self.preview_dir, self.inst_dir, self.vocal_dir, self.target_vocal_dir, self.normalized_dir, self.seed_output_dir, self.output_dir]:
+        for path in [self.inputs_dir, self.preview_dir, self.inst_dir, self.vocal_dir, self.seed_output_dir, self.output_dir]:
             path.mkdir(parents=True, exist_ok=True)
         self.build_ui()
         self.original_stdout = sys.stdout
@@ -128,23 +123,21 @@ class App(ctk.CTk):
         self.card_width = max(480, (self.winfo_screenwidth() - self.safe_padding * 2 - CARD_GAP) // 2)
         safe_zone = ctk.CTkFrame(self, corner_radius=0, border_width=0, fg_color="transparent")
         safe_zone.grid(row=0, column=0, sticky="nsew", padx=self.safe_padding, pady=(24, 10))
-        self.safe_zone = safe_zone
         safe_zone.grid_rowconfigure(0, weight=1)
         safe_zone.grid_columnconfigure(0, weight=1)
         cards = ctk.CTkScrollableFrame(safe_zone, corner_radius=0, border_width=0, fg_color="transparent")
         cards.grid(row=0, column=0, sticky="nsew")
         cards.grid_columnconfigure(0, weight=0, minsize=self.card_width)
         cards.grid_columnconfigure(1, weight=0, minsize=self.card_width)
-        self.cards_scrollable = cards
         self.source_card = self.file_card(cards, 0, "📌 Source", "Choose the full song, audio, or video.", self.select_source, "source")
         self.source_card["frame"].grid(row=0, column=0, sticky="nsew", pady=(0, 8), padx=(0, 8))
         self.target_card = self.file_card(cards, 0, "📌 Target Voice", "Choose the target voice reference.", self.select_target, "target")
         self.target_card["frame"].grid(row=0, column=1, sticky="nsew", pady=(0, 8), padx=(8, 0))
         divider = ctk.CTkFrame(cards, width=self.card_width * 2 + CARD_GAP, height=2, corner_radius=0, border_width=0, fg_color=("gray75", "gray25"))
         divider.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
-        self.stem_card = self.stem_ui(cards, 2, 0)
-        self.settings_card = self.settings_ui(cards, 2, 1)
-        self.output_card = self.output_ui(cards, 3, 0)
+        self.stem_ui(cards, 2, 0)
+        self.settings_ui(cards, 2, 1)
+        self.output_ui(cards, 3, 0)
         console_card = ctk.CTkFrame(cards, width=self.card_width, height=OUTPUT_CARD_HEIGHT, corner_radius=12, border_width=0)
         console_card.grid(row=3, column=1, sticky="nsew", pady=7, padx=(8, 0))
         console_card.grid_propagate(False)
@@ -291,7 +284,6 @@ class App(ctk.CTk):
         self.upd_config()
 
     def steps_changed(self, choice):
-        self.steps_var.set(DIFFUSION_STEP_OPTIONS.get(choice, 50))
         self.upd_config()
 
     def follow_pitch_changed(self, choice):
@@ -412,9 +404,6 @@ class App(ctk.CTk):
         print(f"Status: {source_name} WAV loaded as Source")
         self.sep_thread()
 
-    def apply_tts_source(self, wav_path):
-        self.apply_source_file(wav_path, "TTS")
-
     def select_source(self):
         if self.generating or self.separating:
             return
@@ -453,7 +442,7 @@ class App(ctk.CTk):
             self.prepare_target_vocal()
             print("Status: Target voice ready")
         except Exception as exc:
-            self.target_vocal_path = self.target_wav = self.target_preview_wav = None
+            self.target_vocal_path = self.target_wav = None
             print(f"TARGET ERROR: {type(exc).__name__}: {exc}")
             print("Status: Target preparation failed")
         finally:
@@ -513,14 +502,8 @@ class App(ctk.CTk):
     def prepare_target_vocal(self):
         result = prepare_seed_vc_target(self.target_path, log=self.log)
         self.target_vocal_path = Path(result["prepared_path"])
-        self.target_wav = self.target_preview_wav = self.target_vocal_path
+        self.target_wav = self.target_vocal_path
         return self.target_vocal_path
-
-    def ext_audio(self, input_path, output_path, label, channels=1):
-        if not self.ffmpeg:
-            raise RuntimeError(f"FFmpeg was not found: {FFMPEG}")
-        convert_media_to_wav(input_path, output_path, ffmpeg_path=self.ffmpeg, channels=channels, sample_rate=44100, label=label)
-        print(f"{label.title()} audio ready: {display_user_path(output_path)}")
 
     def gen_thread(self):
         if self.generating or self.separating or self.target_loading:
@@ -594,12 +577,6 @@ class App(ctk.CTk):
             self.log_process_output(completed.stdout)
             raise RuntimeError("Final mix failed.")
         print(f"Final mix created: {display_user_path(self.output_path)}")
-
-    def toggle_src_prev(self):
-        self.toggle_prev("source")
-
-    def toggle_tgt_prev(self):
-        self.toggle_prev("target")
 
     def toggle_inst_prev(self):
         self.toggle_prev("instrumental")
@@ -678,7 +655,6 @@ class App(ctk.CTk):
                 self.preview_process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.preview_path = path
             self.preview_kind = kind
-            self.preview_loop = self.loop_enabled
             self.spectrum.play(path)
             self.lyrics.start(path)
             self.set_prev_icons(kind)
@@ -687,7 +663,6 @@ class App(ctk.CTk):
         except Exception as exc:
             self.preview_process = self.preview_kind = None
             self.preview_path = None
-            self.preview_loop = False
             self.cancel_preview_job()
             self.set_prev_icons()
             print(f"Preview error: {type(exc).__name__}: {exc}")
@@ -767,7 +742,6 @@ class App(ctk.CTk):
                 pass
         self.preview_process = self.preview_kind = None
         self.preview_path = None
-        self.preview_loop = False
         if hasattr(self, "spectrum"):
             self.spectrum.stop()
         if hasattr(self, "lyrics"):
@@ -831,7 +805,7 @@ class App(ctk.CTk):
 
     def clear_prev_proc(self):
         self.clear_prev_out()
-        self.source_wav = self.target_wav = self.seed_source_wav = None
+        self.target_wav = self.seed_source_wav = None
         self.uvr_vocal_path = self.inst_path = self.target_vocal_path = None
         self.tgt_prev_wav = None
         self.inst_name.configure(text="Not separated yet", text_color="gray60")
@@ -880,11 +854,6 @@ class App(ctk.CTk):
     def cleanup(self):
         try:
             self.stop_prev()
-        except Exception:
-            pass
-        try:
-            if self.process and self.process.poll() is None:
-                self.process.terminate()
         except Exception:
             pass
         self.cleanup_gpu()
