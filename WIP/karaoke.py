@@ -29,22 +29,16 @@ MAX_LINE_CHARS = 26
 MAX_LINE_SECONDS = 6
 MAX_GAP_SECONDS = 1.0
 LINES_PER_SCREEN = 2
-FONT = "Arial Black"
-FONT_SIZE = 40
-OUTLINE_WIDTH = 7
 WIDTH = 900
-COLOR_UNSUNG = "#ffffff"
-COLOR_SUNG = "#ffe600"
-COLOR_OUTLINE = "#000000"
-BG_TOP = "#1030c8"
-BG_BOTTOM = "#050f5e"
 VIDEO_WIDTH = 1280
 VIDEO_HEIGHT = 720
-VIDEO_FONT_SIZE = 60
-VIDEO_OUTLINE = 5
-VIDEO_MARGIN_BOTTOM = 60
 LEAD_SECONDS = 1.0
 HOLD_SECONDS = 0.6
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+BACKGROUND_EXTENSIONS = ["mp4", "mov", "mkv", "webm", "avi", "png", "jpg", "jpeg", "webp", "bmp"]
+ORIGINAL = {"font": "Arial Black", "weight": ft.FontWeight.W_900, "size": 40, "unsung": "#ffffff", "sung": "#ffe600", "outline_color": "#000000", "outline": 7, "shadow_color": "#000000", "shadow": None, "bg_top": "#1030c8", "bg_bottom": "#050f5e", "video_size": 60, "video_outline": 5, "video_shadow": 0, "margin": 60, "dim": 0}
+LIMBUS = {"font": "Pretendard", "weight": ft.FontWeight.W_500, "size": 34, "unsung": "#7b88c9", "sung": "#b9c6ff", "outline_color": "#0a0e2a", "outline": 3, "shadow_color": "#05071a", "shadow": (0.04, 0.08), "bg_top": "#3a3f4d", "bg_bottom": "#0e1016", "video_size": 44, "video_outline": 2, "video_shadow": 4, "margin": 90, "dim": -0.12}
+STYLES = {"Original": ORIGINAL, "Limbus Company Karaoke": LIMBUS}
 
 _model = None
 _model_lock = threading.Lock()
@@ -179,9 +173,9 @@ def ass_time(seconds):
     total = max(0, round(seconds * 100))
     return f"{total // 360000}:{total // 6000 % 60:02d}:{total // 100 % 60:02d}.{total % 100:02d}"
 
-def build_ass(lines):
-    style = f"Style: Default,{FONT},{VIDEO_FONT_SIZE},{ass_color(COLOR_SUNG)},{ass_color(COLOR_UNSUNG)},{ass_color(COLOR_OUTLINE)},{ass_color(COLOR_OUTLINE)},0,0,0,0,100,100,0,0,1,{VIDEO_OUTLINE},0,2,40,40,{VIDEO_MARGIN_BOTTOM},1"
-    output = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {VIDEO_WIDTH}", f"PlayResY: {VIDEO_HEIGHT}", "WrapStyle: 2", "", "[V4+ Styles]", "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding", style, "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
+def build_ass(lines, style):
+    style_line = f"Style: Default,{style['font']},{style['video_size']},{ass_color(style['sung'])},{ass_color(style['unsung'])},{ass_color(style['outline_color'])},{ass_color(style['shadow_color'])},0,0,0,0,100,100,0,0,1,{style['video_outline']},{style['video_shadow']},2,40,40,{style['margin']},1"
+    output = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {VIDEO_WIDTH}", f"PlayResY: {VIDEO_HEIGHT}", "WrapStyle: 2", "", "[V4+ Styles]", "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding", style_line, "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     blocks = [lines[index:index + LINES_PER_SCREEN] for index in range(0, len(lines), LINES_PER_SCREEN)]
     previous_end = 0.0
     for number, block in enumerate(blocks):
@@ -205,25 +199,24 @@ def build_ass(lines):
     debug(f"subtitle blocks written: {len(blocks)}")
     return "\n".join(output)
 
-def make_background(path):
+def make_background(path, style):
     surface = pygame.Surface((VIDEO_WIDTH, VIDEO_HEIGHT))
-    top = pygame.Color(BG_TOP)
-    bottom = pygame.Color(BG_BOTTOM)
+    top = pygame.Color(style["bg_top"])
+    bottom = pygame.Color(style["bg_bottom"])
     for y in range(VIDEO_HEIGHT):
         pygame.draw.line(surface, top.lerp(bottom, y / (VIDEO_HEIGHT - 1)), (0, y), (VIDEO_WIDTH, y))
-    pygame.image.save(surface, path)
+    pygame.image.save(surface, str(path))
 
-def render_video(audio, video, output, lines):
+def render_video(audio, background, output, lines, style):
     if not shutil.which("ffmpeg"):
         raise RuntimeError("FFmpeg not found. Install it and add it to PATH.")
     with tempfile.TemporaryDirectory() as folder:
-        Path(folder, "lyrics.ass").write_text(build_ass(lines), encoding="utf-8")
-        if video:
-            source = ["-stream_loop", "-1", "-i", str(Path(video).resolve())]
-        else:
-            make_background(os.path.join(folder, "bg.png"))
-            source = ["-loop", "1", "-framerate", "25", "-i", "bg.png"]
-        fit = f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},ass=lyrics.ass"
+        Path(folder, "lyrics.ass").write_text(build_ass(lines, style), encoding="utf-8")
+        background = Path(background).resolve() if background else Path(folder, "bg.png")
+        if not background.exists():
+            make_background(background, style)
+        source = ["-loop", "1", "-framerate", "25", "-i", str(background)] if background.suffix.lower() in IMAGE_EXTENSIONS else ["-stream_loop", "-1", "-i", str(background)]
+        fit = f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness={style['dim']},ass=lyrics.ass"
         command = ["ffmpeg", "-y"] + source + ["-i", str(Path(audio).resolve()), "-vf", fit, "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "25", "-c:a", "aac", "-shortest", str(Path(output).resolve())]
         debug(f"ffmpeg command: {' '.join(command)}")
         result = subprocess.run(command, cwd=folder, capture_output=True, text=True)
@@ -231,17 +224,27 @@ def render_video(audio, video, output, lines):
             debug(f"ffmpeg stderr tail: {result.stderr[-800:]}")
             raise RuntimeError(result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "FFmpeg failed.")
 
-def make_word(text):
-    outline = ft.Text(spans=[ft.TextSpan(text, style=ft.TextStyle(size=FONT_SIZE, font_family=FONT, weight=ft.FontWeight.W_900, foreground=ft.Paint(color=COLOR_OUTLINE, stroke_width=OUTLINE_WIDTH, style=ft.PaintingStyle.STROKE)))])
-    fill = ft.Text(text, size=FONT_SIZE, font_family=FONT, weight=ft.FontWeight.W_900, color=COLOR_UNSUNG)
-    return ft.Container(content=ft.Stack(controls=[outline, fill]), padding=ft.Padding.symmetric(horizontal=7))
+def make_word(text, style):
+    def glyph(color, stroke=0):
+        options = {"size": style["size"], "font_family": style["font"], "weight": style["weight"]}
+        if stroke:
+            return ft.Text(spans=[ft.TextSpan(text, style=ft.TextStyle(foreground=ft.Paint(color=color, stroke_width=stroke, style=ft.PaintingStyle.STROKE), **options))])
+        return ft.Text(text, color=color, **options)
+
+    layers = []
+    if style["shadow"]:
+        layers.append(ft.Container(content=glyph(style["shadow_color"]), offset=ft.Offset(*style["shadow"]), opacity=0.8))
+    layers.append(glyph(style["outline_color"], style["outline"]))
+    layers.append(glyph(style["unsung"]))
+    return ft.Container(content=ft.Stack(controls=layers), padding=ft.Padding.symmetric(horizontal=7))
 
 class BookReader:
     def __init__(self, page):
         self.page = page
+        self.style = ORIGINAL
         self.lines = []
         self.audio_path = ""
-        self.video_path = ""
+        self.background_path = ""
         self.words = []
         self.items = []
         self.rows = []
@@ -260,34 +263,43 @@ class BookReader:
         self.position_text = ft.Text("00:00 / 00:00", size=14, color="#777d89")
         self.progress = ft.ProgressRing(visible=False, width=22, height=22, stroke_width=3)
         self.view = ft.Column(alignment=ft.MainAxisAlignment.END, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=28, expand=True)
-        self.reader = ft.Container(content=self.message("Upload an audio file to begin."), width=WIDTH, gradient=ft.LinearGradient(begin=ft.Alignment(0, -1), end=ft.Alignment(0, 1), colors=[BG_TOP, BG_BOTTOM]), border_radius=18, padding=28)
+        self.reader = ft.Container(content=self.message("Upload an audio file to begin."), width=WIDTH, border_radius=18, padding=28)
+        self.refresh_reader()
         self.upload_button = ft.Button(content="Upload Audio", icon=ft.Icons.UPLOAD_FILE, on_click=self.pick_audio)
-        self.video_button = ft.Button(content="Background Video", icon=ft.Icons.VIDEOCAM, on_click=self.pick_video)
+        self.background_button = ft.Button(content="Background Image/Video", icon=ft.Icons.IMAGE, on_click=self.pick_background)
+        self.style_dropdown = ft.Dropdown(value="Original", width=240, options=[ft.DropdownOption(key=name, text=name) for name in STYLES], on_select=self.change_style)
         self.play_button = ft.Button(content="Play", icon=ft.Icons.PLAY_ARROW, disabled=True, on_click=self.toggle_play)
         self.export_button = ft.Button(content="Export Video", icon=ft.Icons.MOVIE, disabled=True, on_click=self.export_video)
         self.reset_button = ft.Button(content="Reset", icon=ft.Icons.DELETE_OUTLINE, disabled=True, on_click=self.reset)
         page.services.append(self.file_picker)
         header = [ft.Text("Karaoke Reader", size=30, weight=ft.FontWeight.BOLD), ft.Text("Transcribe everything first, then sing along word by word.", size=14, color="#777d89")]
-        body = [ft.Row(controls=[self.upload_button, self.video_button, self.progress], alignment=ft.MainAxisAlignment.CENTER), ft.Row(controls=[self.file_name, self.position_text], width=WIDTH), ft.Row(controls=[self.reader], alignment=ft.MainAxisAlignment.CENTER, vertical_alignment=ft.CrossAxisAlignment.STRETCH, expand=True)]
+        body = [ft.Row(controls=[self.upload_button, self.background_button, self.style_dropdown, self.progress], alignment=ft.MainAxisAlignment.CENTER), ft.Row(controls=[self.file_name, self.position_text], width=WIDTH), ft.Row(controls=[self.reader], alignment=ft.MainAxisAlignment.CENTER, vertical_alignment=ft.CrossAxisAlignment.STRETCH, expand=True)]
         footer = [ft.Row(controls=[self.play_button, self.export_button, self.reset_button], alignment=ft.MainAxisAlignment.CENTER), self.status]
         page.add(ft.SafeArea(content=ft.Column(controls=header + body + footer, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=14, expand=True), expand=True))
 
     def message(self, text):
         return ft.Column(controls=[ft.Text(text, size=24, color="#c9d4ff")], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True)
 
-    def build_book(self, lines):
+    def refresh_reader(self):
+        self.reader.gradient = ft.LinearGradient(begin=ft.Alignment(0, -1), end=ft.Alignment(0, 1), colors=[self.style["bg_top"], self.style["bg_bottom"]])
+        is_image = self.background_path.lower().endswith(IMAGE_EXTENSIONS)
+        self.reader.image = ft.DecorationImage(src=self.background_path, fit=ft.BoxFit.COVER) if is_image else None
+
+    def build_book(self, lines, block=0, revealed=0):
         self.lines = lines
         self.words = [word for line in lines for word in line]
         self.line_of = [index for index, line in enumerate(lines) for _ in line]
         self.starts = [word["start"] for word in self.words]
-        self.items = [make_word(word["text"]) for word in self.words]
+        self.items = [make_word(word["text"], self.style) for word in self.words]
         self.rows = []
         position = 0
         for line in lines:
             self.rows.append(ft.Row(controls=self.items[position:position + len(line)], alignment=ft.MainAxisAlignment.CENTER, wrap=False, spacing=0))
             position += len(line)
         debug(f"book built: {len(self.words)} words, {len(self.rows)} rows")
-        self.show(0)
+        self.revealed = 0
+        self.show(block)
+        self.apply(revealed)
         self.reader.content = self.view
 
     def show(self, block):
@@ -298,7 +310,7 @@ class BookReader:
         old = self.revealed
         self.revealed = revealed
         for index in range(min(old, revealed), max(old, revealed)):
-            self.items[index].content.controls[1].color = COLOR_SUNG if index < revealed else COLOR_UNSUNG
+            self.items[index].content.controls[-1].color = self.style["sung"] if index < revealed else self.style["unsung"]
 
     def clear(self):
         self.playing = False
@@ -321,12 +333,21 @@ class BookReader:
         self.export_button.disabled = True
         self.reset_button.disabled = True
 
-    async def pick_video(self, e=None):
-        files = await self.file_picker.pick_files(allow_multiple=False, file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["mp4", "mov", "mkv", "webm", "avi"])
+    def change_style(self, e=None):
+        self.style = STYLES[self.style_dropdown.value]
+        self.refresh_reader()
+        if self.lines:
+            self.build_book(self.lines, max(self.block, 0), self.revealed)
+        debug(f"style changed: {self.style_dropdown.value}")
+        self.page.update()
+
+    async def pick_background(self, e=None):
+        files = await self.file_picker.pick_files(allow_multiple=False, file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=BACKGROUND_EXTENSIONS)
         if files and files[0].path:
-            self.video_path = files[0].path
-            debug(f"background video: {self.video_path}")
-            self.status.value = f"Background video: {files[0].name}"
+            self.background_path = files[0].path
+            self.refresh_reader()
+            debug(f"background: {self.background_path}")
+            self.status.value = f"Background: {files[0].name}"
             self.page.update()
 
     async def pick_audio(self, e=None):
@@ -373,7 +394,7 @@ class BookReader:
         self.status.value = "Rendering video..."
         self.page.update()
         try:
-            await asyncio.to_thread(render_video, source, self.video_path, output, self.lines)
+            await asyncio.to_thread(render_video, source, self.background_path, output, self.lines, self.style)
             debug(f"video saved: {output}")
             self.status.value = f"Saved: {output}"
         except Exception as error:
@@ -449,7 +470,8 @@ class BookReader:
 
     async def reset(self, e=None):
         self.clear()
-        self.video_path = ""
+        self.background_path = ""
+        self.refresh_reader()
         self.file_name.value = "No file selected"
         self.reader.content = self.message("Upload an audio file to begin.")
         self.status.value = "Upload a music or spoken-audio file to begin."

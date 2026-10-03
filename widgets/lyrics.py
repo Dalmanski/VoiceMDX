@@ -9,7 +9,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
 import customtkinter as ctk
-MODEL_SIZE = "small"
+MODEL_SIZE = "medium"
 DEVICE = "cuda"
 COMPUTE_TYPE = "int8_float16"
 LANGUAGE = None
